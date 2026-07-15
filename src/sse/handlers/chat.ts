@@ -1729,6 +1729,9 @@ async function handleSingleModelChat(
         result.status === 499 ||
         result.errorCode === "client_disconnected" ||
         result.errorType === "client_disconnected" ||
+        // Client abort surfaced as a bare error (no statusCode → defaults to 502):
+        // a local lifecycle event, not a provider failure (#4602 policy).
+        isLocalStreamLifecycleError(result.error) ||
         (is401 && hasExtraKeys) ||
         isSelfInflictedUpstreamTimeout(result.status, result.errorType, provider);
 

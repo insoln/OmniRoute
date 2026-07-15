@@ -457,7 +457,10 @@ export async function executeChatWithBreaker({
               if (
                 Number(failure?.status) === 499 ||
                 failure?.code === "client_disconnected" ||
-                failure?.type === "client_disconnected"
+                failure?.type === "client_disconnected" ||
+                // Client abort surfaced as a bare error message (#4602 policy):
+                // local lifecycle event, not a provider failure.
+                isLocalStreamLifecycleError(failure?.message ?? failure)
               ) {
                 return;
               }
