@@ -1741,6 +1741,20 @@ export async function handleChatCore({
         // Non-CC path: full normalization including content type conversion.
         normalizeClaudeUpstreamMessages(translatedBody, { preserveToolResultBlocks: true });
       }
+
+      // Combo replays one shared history across candidate models. A thinking-block
+      // signature is bound to the model that produced it, so a prior turn's signature
+      // is rejected by a different combo target with `400 … Invalid signature in
+      // thinking block`, surfacing to the client as a bare "API error" once every
+      // candidate fails. Anthropic's rule on a model switch is to drop prior-turn
+      // thinking blocks (model-specific, ignored by other models). Only Anthropic's
+      // first-party API validates these signatures, so scope the strip to that
+      // provider. See stripPriorTurnThinkingForModelSwitch + issue #2454.
+      if (isCombo && (provider === "claude" || isClaudeCodeCompatibleProvider(provider))) {
+        translatedBody.messages = stripPriorTurnThinkingForModelSwitch(
+          translatedBody.messages
+        ) as typeof translatedBody.messages;
+      }
     } else if (isClaudePassthrough) {
       // Pure passthrough: forward the body as-is without OpenAI round-trip.
       // The Claude→OpenAI→Claude double translation was lossy and corrupted
