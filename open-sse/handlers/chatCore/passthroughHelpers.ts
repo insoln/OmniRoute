@@ -52,6 +52,44 @@ export function redactPassthroughThinkingSignatures(
   return messages;
 }
 
+/**
+ * Strip `thinking` / `redacted_thinking` blocks from prior assistant turns when
+ * the request is being replayed to a DIFFERENT model than produced them.
+ *
+ * A thinking-block signature is bound by Anthropic to the model that generated
+ * it. Combo routing replays one shared message history across several candidate
+ * models, so a signature minted by the previous turn's model is rejected by the
+ * next candidate with `400 … Invalid signature in thinking block`, which in a
+ * combo chain surfaces to the client as a bare "API error" once every candidate
+ * has been tried.
+ *
+ * Anthropic's documented rule for multi-turn extended thinking is: when you
+ * switch models, remove `thinking` / `redacted_thinking` blocks from prior
+ * assistant turns — they are model-specific and other models ignore them (they
+ * only add input tokens). We must NOT rewrite or re-sign the blocks — editing a
+ * thinking block is itself rejected and breaks same-model replay (issue #2454) —
+ * so we drop the whole block. Callers apply this ONLY on a model switch (combo
+ * targets), never on a direct same-model passthrough.
+ *
+ * Pure: returns a new array; the input is not mutated.
+ */
+export function stripPriorTurnThinkingForModelSwitch<
+  T extends { role?: unknown; content?: unknown },
+>(messages: T[]): T[] {
+  if (!Array.isArray(messages)) return messages;
+  return messages.map((message) => {
+    if (!message || message.role !== "assistant" || !Array.isArray(message.content)) {
+      return message;
+    }
+    const filtered = message.content.filter((block) => {
+      const type = (block as { type?: unknown } | null)?.type;
+      return type !== "thinking" && type !== "redacted_thinking";
+    });
+    if (filtered.length === message.content.length) return message;
+    return { ...message, content: filtered };
+  });
+}
+
 export function isClaudeCodeSemanticPassthroughRequest({
   provider,
   sourceFormat,

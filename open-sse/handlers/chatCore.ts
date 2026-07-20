@@ -38,6 +38,7 @@ import {
 import {
   shouldUseNativeCodexPassthrough,
   redactPassthroughThinkingSignatures,
+  stripPriorTurnThinkingForModelSwitch,
   isClaudeCodeSemanticPassthroughRequest,
 } from "./chatCore/passthroughHelpers.ts";
 import {
@@ -1758,6 +1759,20 @@ export async function handleChatCore({
           DEFAULT_THINKING_CLAUDE_SIGNATURE
         ) as typeof translatedBody.messages;
 
+        // Combo routing replays one shared history across several candidate models.
+        // A thinking-block signature is bound to the model that produced it, so a
+        // prior turn's signature is rejected by a different combo target with
+        // `400 … Invalid signature in thinking block` — which, once every candidate
+        // fails, surfaces to the client as a bare "API error". Anthropic's rule on a
+        // model switch is to drop prior-turn thinking blocks (they are model-specific
+        // and ignored by other models), so strip them for combo targets only. Direct
+        // same-model passthrough keeps them (handled above). See issue #2454.
+        if (isCombo) {
+          translatedBody.messages = stripPriorTurnThinkingForModelSwitch(
+            translatedBody.messages
+          ) as typeof translatedBody.messages;
+        }
+
         // Anthropic API rejects requests with both temperature and top_p.
         // VS Code Claude extension and similar clients send both; strip top_p.
         if (translatedBody.temperature !== undefined && translatedBody.top_p !== undefined) {
@@ -3339,7 +3354,13 @@ export async function handleChatCore({
           // otherwise degenerate into a 429 rate-limit storm). Connection stays
           // active since only the specific model is unavailable. (#6827)
           const notFoundCooldownMs = COOLDOWN_MS.notFound;
-          lockModel(provider, errorConnectionId, currentModel, "model_not_found", notFoundCooldownMs);
+          lockModel(
+            provider,
+            errorConnectionId,
+            currentModel,
+            "model_not_found",
+            notFoundCooldownMs
+          );
           console.warn(
             `[provider] Node ${errorConnectionId} model not found (${statusCode}) for ${currentModel} - locking model for ${Math.ceil(notFoundCooldownMs / 1000)}s (connection stays active)`
           );
