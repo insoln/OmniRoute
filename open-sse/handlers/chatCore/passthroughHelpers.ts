@@ -53,34 +53,43 @@ export function redactPassthroughThinkingSignatures(
 }
 
 /**
- * Strip `thinking` / `redacted_thinking` blocks from prior assistant turns when
- * the request is being replayed to a DIFFERENT model than produced them.
+ * Strip `thinking` / `redacted_thinking` blocks from prior assistant turns before
+ * a request is sent to an Anthropic first-party model.
  *
- * A thinking-block signature is bound by Anthropic to the model that generated
- * it. Combo routing replays one shared message history across several candidate
- * models, so a signature minted by the previous turn's model is rejected by the
- * next candidate with `400 … Invalid signature in thinking block`, which in a
- * combo chain surfaces to the client as a bare "API error" once every candidate
- * has been tried.
+ * A thinking-block signature is bound by Anthropic to the model that generated it.
+ * When accumulated history is forwarded to a different model than produced it —
+ * combo fallback, a retry against another model, any cross-model routing — that
+ * model rejects the request with `400 … Invalid signature in thinking block`,
+ * which surfaces to the client as a bare "API error".
  *
- * Anthropic's documented rule for multi-turn extended thinking is: when you
- * switch models, remove `thinking` / `redacted_thinking` blocks from prior
- * assistant turns — they are model-specific and other models ignore them (they
- * only add input tokens). We must NOT rewrite or re-sign the blocks — editing a
- * thinking block is itself rejected and breaks same-model replay (issue #2454) —
- * so we drop the whole block. Callers apply this ONLY on a model switch (combo
- * targets), never on a direct same-model passthrough.
+ * Anthropic's documented rule for multi-turn extended thinking is that prior-turn
+ * `thinking` / `redacted_thinking` blocks MAY be omitted — other models ignore
+ * them and they only add input tokens — so removing them is always safe and makes
+ * the history valid for any target, regardless of which model produced it. We do
+ * NOT rewrite or re-sign blocks: editing a thinking block is itself rejected and
+ * breaks same-model replay (issue #2454); we drop the whole block instead.
+ *
+ * The one block that must be preserved is the thinking of an OPEN tool-use turn:
+ * when the final message is an `assistant` turn (an unresolved `tool_use` awaiting
+ * its `tool_result`), Anthropic requires its thinking block, and it was produced
+ * by the model now being called. So we strip every assistant turn EXCEPT a
+ * trailing assistant message. All earlier assistant turns are prior turns.
  *
  * Pure: returns a new array; the input is not mutated.
  */
-export function stripPriorTurnThinkingForModelSwitch<
+export function stripPriorTurnThinkingForClaudeUpstream<
   T extends { role?: unknown; content?: unknown },
 >(messages: T[]): T[] {
   if (!Array.isArray(messages)) return messages;
-  return messages.map((message) => {
+  // A trailing assistant message is an open tool-use turn produced by the model
+  // now being called; its thinking is required and must be kept verbatim.
+  const lastIndex = messages.length - 1;
+  const keepTrailingAssistant = messages[lastIndex]?.role === "assistant";
+  return messages.map((message, index) => {
     if (!message || message.role !== "assistant" || !Array.isArray(message.content)) {
       return message;
     }
+    if (keepTrailingAssistant && index === lastIndex) return message;
     const filtered = message.content.filter((block) => {
       const type = (block as { type?: unknown } | null)?.type;
       return type !== "thinking" && type !== "redacted_thinking";

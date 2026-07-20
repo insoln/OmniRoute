@@ -38,7 +38,7 @@ import {
 import {
   shouldUseNativeCodexPassthrough,
   redactPassthroughThinkingSignatures,
-  stripPriorTurnThinkingForModelSwitch,
+  stripPriorTurnThinkingForClaudeUpstream,
   isClaudeCodeSemanticPassthroughRequest,
 } from "./chatCore/passthroughHelpers.ts";
 import {
@@ -1742,16 +1742,18 @@ export async function handleChatCore({
         normalizeClaudeUpstreamMessages(translatedBody, { preserveToolResultBlocks: true });
       }
 
-      // Combo replays one shared history across candidate models. A thinking-block
-      // signature is bound to the model that produced it, so a prior turn's signature
-      // is rejected by a different combo target with `400 … Invalid signature in
-      // thinking block`, surfacing to the client as a bare "API error" once every
-      // candidate fails. Anthropic's rule on a model switch is to drop prior-turn
-      // thinking blocks (model-specific, ignored by other models). Only Anthropic's
-      // first-party API validates these signatures, so scope the strip to that
-      // provider. See stripPriorTurnThinkingForModelSwitch + issue #2454.
-      if (isCombo && (provider === "claude" || isClaudeCodeCompatibleProvider(provider))) {
-        translatedBody.messages = stripPriorTurnThinkingForModelSwitch(
+      // A thinking-block signature is bound to the model that produced it. When
+      // accumulated history is forwarded to a different model than produced it
+      // (combo fallback, retry against another model, any cross-model routing),
+      // that model rejects the request with `400 … Invalid signature in thinking
+      // block`, surfacing to the client as a bare "API error". Anthropic's rule is
+      // that prior-turn thinking blocks may be omitted (other models ignore them),
+      // so drop them for any Anthropic first-party target — this makes the history
+      // valid regardless of which model produced it, without editing signatures
+      // (which would break same-model replay, #2454). The open tool-use turn is
+      // preserved by the helper. Only first-party providers validate signatures.
+      if (provider === "claude" || isClaudeCodeCompatibleProvider(provider)) {
+        translatedBody.messages = stripPriorTurnThinkingForClaudeUpstream(
           translatedBody.messages
         ) as typeof translatedBody.messages;
       }
@@ -1773,19 +1775,18 @@ export async function handleChatCore({
           DEFAULT_THINKING_CLAUDE_SIGNATURE
         ) as typeof translatedBody.messages;
 
-        // Combo routing replays one shared history across several candidate models.
-        // A thinking-block signature is bound to the model that produced it, so a
-        // prior turn's signature is rejected by a different combo target with
-        // `400 … Invalid signature in thinking block` — which, once every candidate
-        // fails, surfaces to the client as a bare "API error". Anthropic's rule on a
-        // model switch is to drop prior-turn thinking blocks (they are model-specific
-        // and ignored by other models), so strip them for combo targets only. Direct
-        // same-model passthrough keeps them (handled above). See issue #2454.
-        if (isCombo) {
-          translatedBody.messages = stripPriorTurnThinkingForModelSwitch(
-            translatedBody.messages
-          ) as typeof translatedBody.messages;
-        }
+        // A thinking-block signature is bound to the model that produced it, so
+        // forwarding accumulated history to a different model than produced it
+        // (combo fallback, retry against another model, any cross-model routing)
+        // is rejected with `400 … Invalid signature in thinking block`, surfacing
+        // as a bare "API error". Anthropic allows omitting prior-turn thinking
+        // blocks, so drop them (the open tool-use turn is preserved by the helper)
+        // to make the history valid for any target. redactPassthroughThinkingSignatures
+        // above already handles same-model replay; this removes the cross-model
+        // failure without editing signatures (#2454).
+        translatedBody.messages = stripPriorTurnThinkingForClaudeUpstream(
+          translatedBody.messages
+        ) as typeof translatedBody.messages;
 
         // Anthropic API rejects requests with both temperature and top_p.
         // VS Code Claude extension and similar clients send both; strip top_p.
