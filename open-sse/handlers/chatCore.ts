@@ -38,9 +38,9 @@ import {
 import {
   shouldUseNativeCodexPassthrough,
   redactPassthroughThinkingSignatures,
-  stripPriorTurnThinkingForModelSwitch,
   isClaudeCodeSemanticPassthroughRequest,
 } from "./chatCore/passthroughHelpers.ts";
+import { recoverAnthropicThinkingSignature } from "./chatCore/thinkingSignatureRecovery.ts";
 import {
   buildStreamingResponseHeaders,
   materializeDeduplicatedExecutionResult,
@@ -1742,19 +1742,6 @@ export async function handleChatCore({
         normalizeClaudeUpstreamMessages(translatedBody, { preserveToolResultBlocks: true });
       }
 
-      // Combo replays one shared history across candidate models. A thinking-block
-      // signature is bound to the model that produced it, so a prior turn's signature
-      // is rejected by a different combo target with `400 … Invalid signature in
-      // thinking block`, surfacing to the client as a bare "API error" once every
-      // candidate fails. Anthropic's rule on a model switch is to drop prior-turn
-      // thinking blocks (model-specific, ignored by other models). Only Anthropic's
-      // first-party API validates these signatures, so scope the strip to that
-      // provider. See stripPriorTurnThinkingForModelSwitch + issue #2454.
-      if (isCombo && (provider === "claude" || isClaudeCodeCompatibleProvider(provider))) {
-        translatedBody.messages = stripPriorTurnThinkingForModelSwitch(
-          translatedBody.messages
-        ) as typeof translatedBody.messages;
-      }
     } else if (isClaudePassthrough) {
       // Pure passthrough: forward the body as-is without OpenAI round-trip.
       // The Claude→OpenAI→Claude double translation was lossy and corrupted
@@ -1772,20 +1759,6 @@ export async function handleChatCore({
           translatedBody.messages,
           DEFAULT_THINKING_CLAUDE_SIGNATURE
         ) as typeof translatedBody.messages;
-
-        // Combo routing replays one shared history across several candidate models.
-        // A thinking-block signature is bound to the model that produced it, so a
-        // prior turn's signature is rejected by a different combo target with
-        // `400 … Invalid signature in thinking block` — which, once every candidate
-        // fails, surfaces to the client as a bare "API error". Anthropic's rule on a
-        // model switch is to drop prior-turn thinking blocks (they are model-specific
-        // and ignored by other models), so strip them for combo targets only. Direct
-        // same-model passthrough keeps them (handled above). See issue #2454.
-        if (isCombo) {
-          translatedBody.messages = stripPriorTurnThinkingForModelSwitch(
-            translatedBody.messages
-          ) as typeof translatedBody.messages;
-        }
 
         // Anthropic API rejects requests with both temperature and top_p.
         // VS Code Claude extension and similar clients send both; strip top_p.
@@ -3216,7 +3189,7 @@ export async function handleChatCore({
   await persistCodexQuotaState(normalizeHeaders(providerResponse.headers), providerResponse.status);
 
   // Check provider response - return error info for fallback handling
-  if (!providerResponse.ok) {
+  providerFailure: if (!providerResponse.ok) {
     trackPendingRequest(model, provider, connectionId, false);
 
     let statusCode = providerResponse.status;
@@ -3238,6 +3211,45 @@ export async function handleChatCore({
       upstreamErrorCode = details.errorCode as string | undefined;
       upstreamErrorType = details.errorType as string | undefined;
     }
+
+    const signatureRecovery = await recoverAnthropicThinkingSignature({
+      provider,
+      statusCode,
+      message,
+      body: translatedBody,
+      execute: async (recoveryBody) => {
+        translatedBody = recoveryBody as typeof translatedBody;
+        return executeProviderRequest(currentModel, false);
+      },
+      parseError: (response) => parseUpstreamError(response, provider),
+    });
+    if (signatureRecovery.attempted && signatureRecovery.execution) {
+      providerResponse = signatureRecovery.execution.response;
+      if (signatureRecovery.succeeded) {
+        providerUrl = signatureRecovery.execution.url;
+        providerHeaders = signatureRecovery.execution.headers;
+        finalBody = providerRequestCapture.body(signatureRecovery.execution.transformedBody);
+        reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
+        updatePendingScope(pendingScope, {
+          providerRequest: finalBody,
+          providerUrl,
+          stage: "provider_response_started",
+        });
+        log?.info?.(
+          "THINKING_SIGNATURE",
+          `Recovered ${provider}/${currentModel} after one historical-thinking retry`
+        );
+      } else if (signatureRecovery.error) {
+        statusCode = signatureRecovery.error.statusCode;
+        message = signatureRecovery.error.message;
+        retryAfterMs = signatureRecovery.error.retryAfterMs;
+        upstreamErrorBody = signatureRecovery.error.responseBody;
+        upstreamErrorCode = signatureRecovery.error.errorCode as string | undefined;
+        upstreamErrorType = signatureRecovery.error.errorType as string | undefined;
+      }
+    }
+
+    if (signatureRecovery.succeeded) break providerFailure;
 
     // T06/T10/T36: classify provider errors and persist terminal account states.
     let errorType = classifyProviderError(statusCode, message, provider);
