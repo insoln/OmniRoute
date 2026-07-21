@@ -9,7 +9,10 @@ const STREAMING_RESPONSE_HEADER_DENYLIST = new Set([
   "content-encoding",
   "content-length",
   "transfer-encoding",
+  "set-cookie",
 ]);
+const MAX_FORWARDED_RESPONSE_HEADER_VALUE_BYTES = 2048;
+const responseHeaderEncoder = new TextEncoder();
 
 /**
  * Prefix of Next.js internal middleware control headers.
@@ -64,7 +67,8 @@ export function buildStreamingResponseHeaders(
   providerHeaders.forEach((value, key) => {
     if (
       !STREAMING_RESPONSE_HEADER_DENYLIST.has(key.toLowerCase()) &&
-      !isNextMiddlewareControlHeader(key)
+      !isNextMiddlewareControlHeader(key) &&
+      responseHeaderEncoder.encode(value).byteLength <= MAX_FORWARDED_RESPONSE_HEADER_VALUE_BYTES
     ) {
       forwardedHeaders.push([key, value]);
     }

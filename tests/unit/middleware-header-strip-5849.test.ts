@@ -50,6 +50,19 @@ test("streaming path: buildStreamingResponseHeaders strips x-middleware-* and pr
   assert.ok(requestIdKey, "x-request-id must be preserved");
   assert.equal(out[requestIdKey as string], "req-123");
 });
+test("streaming path strips oversized and credential-bearing upstream response headers", () => {
+  const upstream = new Headers({
+    "x-request-id": "req-oversized-guard",
+    "x-upstream-diagnostic": "x".repeat(2049),
+    "set-cookie": "session=upstream-secret; HttpOnly",
+  });
+
+  const out = buildStreamingResponseHeaders(upstream, {});
+  const lowerKeys = Object.keys(out).map((key) => key.toLowerCase());
+  assert.ok(lowerKeys.includes("x-request-id"));
+  assert.ok(!lowerKeys.includes("x-upstream-diagnostic"));
+  assert.ok(!lowerKeys.includes("set-cookie"));
+});
 
 test("non-streaming JSON path: stripNextMiddlewareControlHeaders removes the family, keeps the rest", () => {
   const headers = new Headers();
