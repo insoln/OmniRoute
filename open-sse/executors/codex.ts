@@ -996,7 +996,11 @@ export class CodexExecutor extends BaseExecutor {
             );
           };
           ws.onclose = () => {
-            finishStream({ reason: "upstream_closed", closeSocket: false });
+            if (closed) return;
+            failController(
+              "upstream_websocket_closed",
+              "Codex upstream WebSocket closed before a terminal response event"
+            );
           };
           if (!closed) {
             await prl.captureCurrentProviderBody(url, headers, bodyString, nextInput.log);
