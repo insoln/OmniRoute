@@ -1,5 +1,11 @@
 # ── Common base with runtime deps ──────────────────────────────────────────
-FROM node:24-trixie-slim AS base
+# Pinned by digest: the floating `node:24-trixie-slim` tag rolled forward to a Node
+# 24.x patch whose N-API teardown aborts better-sqlite3's Statement destructor
+# ("Assertion failed: (env) != nullptr") in Next.js page-data collection workers,
+# killing `npm run build` with SIGABRT. This digest is the last base image known to
+# build this tree (build of 2026-07-21, the image running in production). Unpin once
+# the abort is fixed upstream or the DB is no longer opened during page-data collection.
+FROM node:24-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573 AS base
 WORKDIR /app
 
 # `apt-get upgrade` pulls the security-patched versions of the Debian (trixie)
