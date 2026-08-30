@@ -58,7 +58,10 @@ import {
 } from "../services/tokenRefresh.ts";
 import type { ProviderRequestDefaults } from "../services/providerRequestDefaults.ts";
 import { signRequestBody } from "../services/claudeCodeCCH.ts";
-import { normalizeCacheControlTtl } from "../services/claudeCodeConstraints.ts";
+import {
+  normalizeCacheControlTtl,
+  relocateDirectiveOnlyMessages,
+} from "../services/claudeCodeConstraints.ts";
 import {
   appendAnthropicBetaHeader,
   CLAUDE_CODE_COMPATIBLE_REDACT_THINKING_BETA,
@@ -1348,7 +1351,14 @@ export class BaseExecutor {
         // routing mode (grouped/raw/combo) and the native passthrough share,
         // before fingerprinting and CCH signing serialize the body.
         if (this.provider === "claude" || usesClaudeCodeProtocol) {
-          enforceThinkingTemperature(transformedBody as Record<string, unknown>);
+          const tb = transformedBody as Record<string, unknown>;
+          // Final wire-body guard: chatCore already relocates Claude Code's
+          // directive-only system envelope, but direct executor calls and later
+          // payload transforms can bypass or undo that repair. Anthropic rejects
+          // the envelope at messages[0], so enforce the positional invariant at
+          // the last shared chokepoint before fingerprinting and CCH signing.
+          relocateDirectiveOnlyMessages(tb);
+          enforceThinkingTemperature(tb);
         }
 
         // Delegated Context Editing (opt-in): attach the clear_tool_uses strategy so

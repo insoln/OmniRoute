@@ -32,6 +32,60 @@ export function enforceThinkingTemperature(body: Record<string, unknown>): void 
   }
 }
 
+/**
+ * Moves a directive-only system message (empty content array + message-level
+ * `output_config`) off `messages[0]`, which Anthropic reserves for the initial
+ * system-prompt position. Legitimate directives already later in the conversation
+ * stay untouched.
+ */
+export function relocateDirectiveOnlyMessages(payload: Record<string, unknown>): void {
+  if (!Array.isArray(payload.messages) || payload.messages.length === 0) return;
+  const messages = payload.messages as Array<Record<string, unknown>>;
+  const isSystemRole = (role: unknown): boolean =>
+    typeof role === "string" &&
+    (role.toLowerCase() === "system" || role.toLowerCase() === "developer");
+  const isEmptySystem = (message: Record<string, unknown>): boolean =>
+    message != null &&
+    typeof message === "object" &&
+    isSystemRole(message.role) &&
+    Array.isArray(message.content) &&
+    message.content.length === 0;
+  const isDirectiveOnly = (message: Record<string, unknown>): boolean =>
+    isEmptySystem(message) &&
+    message.output_config != null &&
+    typeof message.output_config === "object" &&
+    !Array.isArray(message.output_config);
+
+  if (!isEmptySystem(messages[0])) return;
+
+  let runEnd = 0;
+  while (runEnd < messages.length && isEmptySystem(messages[runEnd])) runEnd++;
+  const directives = messages.slice(0, runEnd).filter(isDirectiveOnly);
+
+  let insertAfter = -1;
+  for (let i = runEnd; i < messages.length; i++) {
+    const candidate = messages[i];
+    if (candidate != null && typeof candidate === "object" && !isSystemRole(candidate.role)) {
+      insertAfter = i;
+      break;
+    }
+  }
+
+  if (insertAfter === -1) {
+    if (payload.output_config == null && directives.length > 0) {
+      payload.output_config = directives[0].output_config;
+    }
+    payload.messages = messages.slice(runEnd);
+    return;
+  }
+
+  payload.messages = [
+    ...messages.slice(runEnd, insertAfter + 1),
+    ...directives,
+    ...messages.slice(insertAfter + 1),
+  ];
+}
+
 export function disableThinkingIfToolChoiceForced(body: Record<string, unknown>): void {
   const toolChoice = body.tool_choice as Record<string, unknown> | string | undefined;
   if (!toolChoice) return;
