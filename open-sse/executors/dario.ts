@@ -32,6 +32,7 @@ import {
 } from "./base.ts";
 import { HTTP_STATUS, FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import { getProviderPluginManifestHeader } from "../config/providerPluginManifestUrl.ts";
+import { relocateDirectiveOnlyMessages } from "../services/claudeCodeConstraints.ts";
 
 const DEFAULT_PORT = 3456;
 const DEFAULT_HOST = "127.0.0.1";
@@ -207,6 +208,9 @@ export class DarioExecutor extends BaseExecutor {
     const transformed = { ...(body as Record<string, unknown>) };
     if (transformed.model !== model) {
       transformed.model = model;
+    }
+    if (this.isAnthropicShape(transformed)) {
+      relocateDirectiveOnlyMessages(transformed);
     }
     return transformed;
   }

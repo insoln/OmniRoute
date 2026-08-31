@@ -23,6 +23,7 @@ import {
 } from "./base.ts";
 import { HTTP_STATUS, FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import { getProviderPluginManifestHeader } from "../config/providerPluginManifestUrl.ts";
+import { relocateDirectiveOnlyMessages } from "../services/claudeCodeConstraints.ts";
 import { cloakThirdPartyToolNames } from "../services/claudeCodeToolRemapper.ts";
 import { sanitizeClaudeToolSchemas } from "../translator/helpers/schemaCoercion.ts";
 
@@ -132,7 +133,9 @@ export function clearCliproxyapiUrlCache() {
     if (typeof settings.cliproxyapi_url === "string" && settings.cliproxyapi_url.trim()) {
       _cachedSettingsUrl = { url: settings.cliproxyapi_url.trim(), ts: Date.now() };
     }
-  } catch { /* env vars will be used as fallback */ }
+  } catch {
+    /* env vars will be used as fallback */
+  }
 })();
 
 /**
@@ -155,7 +158,9 @@ async function resolveCliproxyapiBaseUrl(): Promise<string> {
       _cachedSettingsUrl = { url, ts: Date.now() };
       return url;
     }
-  } catch { /* fall through to env vars */ }
+  } catch {
+    /* fall through to env vars */
+  }
 
   const host = process.env.CLIPROXYAPI_HOST || DEFAULT_HOST;
   const port = parseInt(process.env.CLIPROXYAPI_PORT || String(DEFAULT_PORT), 10);
@@ -302,6 +307,7 @@ export class CliproxyapiExecutor extends BaseExecutor {
     // Mirrors the runtime "Patch I2/I4" effect previously applied via patch.mjs.
     // Strips are no-op when fields are absent (OpenAI-shape passthrough).
     if (this.isAnthropicShape(transformed)) {
+      relocateDirectiveOnlyMessages(transformed);
       delete transformed.output_config;
       delete transformed.context_management;
       delete transformed.client_info;
