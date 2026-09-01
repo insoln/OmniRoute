@@ -307,7 +307,14 @@ export class CliproxyapiExecutor extends BaseExecutor {
     // Mirrors the runtime "Patch I2/I4" effect previously applied via patch.mjs.
     // Strips are no-op when fields are absent (OpenAI-shape passthrough).
     if (this.isAnthropicShape(transformed)) {
-      relocateDirectiveOnlyMessages(transformed);
+      const firstMessage = Array.isArray(transformed.messages) ? transformed.messages[0] : null;
+      const hasLeadingDirective =
+        firstMessage != null &&
+        typeof firstMessage === "object" &&
+        (firstMessage as Record<string, unknown>).output_config != null;
+      if (hasLeadingDirective) {
+        relocateDirectiveOnlyMessages(transformed);
+      }
       delete transformed.output_config;
       delete transformed.context_management;
       delete transformed.client_info;

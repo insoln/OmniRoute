@@ -209,7 +209,12 @@ export class DarioExecutor extends BaseExecutor {
     if (transformed.model !== model) {
       transformed.model = model;
     }
-    if (this.isAnthropicShape(transformed)) {
+    const firstMessage = Array.isArray(transformed.messages) ? transformed.messages[0] : null;
+    const hasLeadingDirective =
+      firstMessage != null &&
+      typeof firstMessage === "object" &&
+      (firstMessage as Record<string, unknown>).output_config != null;
+    if (this.isAnthropicShape(transformed) && hasLeadingDirective) {
       relocateDirectiveOnlyMessages(transformed);
     }
     return transformed;

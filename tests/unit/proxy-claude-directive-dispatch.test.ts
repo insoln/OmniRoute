@@ -93,4 +93,18 @@ for (const [name, createExecutor] of executorCases) {
 
     assert.deepEqual(captured.messages, messages);
   });
+
+  test(`${name} OpenAI content-part arrays do not trigger directive relocation`, async () => {
+    const messages = [
+      { role: "system", content: [] },
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+    ];
+    const captured = await captureWireBody(createExecutor(), {
+      model: "claude-opus-5",
+      messages,
+      stream: false,
+    });
+
+    assert.deepEqual(captured.messages, messages);
+  });
 }
