@@ -23,7 +23,10 @@ import {
 } from "./base.ts";
 import { HTTP_STATUS, FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import { getProviderPluginManifestHeader } from "../config/providerPluginManifestUrl.ts";
-import { relocateDirectiveOnlyMessages } from "../services/claudeCodeConstraints.ts";
+import {
+  hasLeadingDirectiveOnlyMessage,
+  relocateDirectiveOnlyMessages,
+} from "../services/claudeCodeConstraints.ts";
 import { cloakThirdPartyToolNames } from "../services/claudeCodeToolRemapper.ts";
 import { sanitizeClaudeToolSchemas } from "../translator/helpers/schemaCoercion.ts";
 
@@ -307,12 +310,7 @@ export class CliproxyapiExecutor extends BaseExecutor {
     // Mirrors the runtime "Patch I2/I4" effect previously applied via patch.mjs.
     // Strips are no-op when fields are absent (OpenAI-shape passthrough).
     if (this.isAnthropicShape(transformed)) {
-      const firstMessage = Array.isArray(transformed.messages) ? transformed.messages[0] : null;
-      const hasLeadingDirective =
-        firstMessage != null &&
-        typeof firstMessage === "object" &&
-        (firstMessage as Record<string, unknown>).output_config != null;
-      if (hasLeadingDirective) {
+      if (hasLeadingDirectiveOnlyMessage(transformed)) {
         relocateDirectiveOnlyMessages(transformed);
       }
       delete transformed.output_config;

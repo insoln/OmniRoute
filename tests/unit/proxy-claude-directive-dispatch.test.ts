@@ -80,6 +80,23 @@ for (const [name, createExecutor] of executorCases) {
     assert.deepEqual(captured.messages, [{ role: "user", content: "hello" }, directive]);
   });
 
+  test(`${name} Anthropic dispatch scans the leading empty-system run`, async () => {
+    const directive = {
+      role: "system",
+      content: [],
+      output_config: { effort: "medium" },
+    };
+    const captured = await captureWireBody(createExecutor(), {
+      model: "claude-opus-5",
+      max_tokens: 64,
+      system: [{ type: "text", text: "You are Claude." }],
+      messages: [{ role: "system", content: [] }, directive, { role: "user", content: "hello" }],
+      stream: false,
+    });
+
+    assert.deepEqual(captured.messages, [{ role: "user", content: "hello" }, directive]);
+  });
+
   test(`${name} OpenAI dispatch leaves an initial system message untouched`, async () => {
     const messages = [
       { role: "system", content: "Be concise" },

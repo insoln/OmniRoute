@@ -32,7 +32,10 @@ import {
 } from "./base.ts";
 import { HTTP_STATUS, FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import { getProviderPluginManifestHeader } from "../config/providerPluginManifestUrl.ts";
-import { relocateDirectiveOnlyMessages } from "../services/claudeCodeConstraints.ts";
+import {
+  hasLeadingDirectiveOnlyMessage,
+  relocateDirectiveOnlyMessages,
+} from "../services/claudeCodeConstraints.ts";
 
 const DEFAULT_PORT = 3456;
 const DEFAULT_HOST = "127.0.0.1";
@@ -209,12 +212,7 @@ export class DarioExecutor extends BaseExecutor {
     if (transformed.model !== model) {
       transformed.model = model;
     }
-    const firstMessage = Array.isArray(transformed.messages) ? transformed.messages[0] : null;
-    const hasLeadingDirective =
-      firstMessage != null &&
-      typeof firstMessage === "object" &&
-      (firstMessage as Record<string, unknown>).output_config != null;
-    if (this.isAnthropicShape(transformed) && hasLeadingDirective) {
+    if (this.isAnthropicShape(transformed) && hasLeadingDirectiveOnlyMessage(transformed)) {
       relocateDirectiveOnlyMessages(transformed);
     }
     return transformed;

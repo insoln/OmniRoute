@@ -32,6 +32,31 @@ export function enforceThinkingTemperature(body: Record<string, unknown>): void 
   }
 }
 
+/** Returns true when the leading empty system/developer run contains a directive. */
+export function hasLeadingDirectiveOnlyMessage(payload: Record<string, unknown>): boolean {
+  if (!Array.isArray(payload.messages)) return false;
+
+  for (const candidate of payload.messages) {
+    if (candidate == null || typeof candidate !== "object") return false;
+    const message = candidate as Record<string, unknown>;
+    const role = typeof message.role === "string" ? message.role.toLowerCase() : "";
+    const isEmptySystem =
+      (role === "system" || role === "developer") &&
+      Array.isArray(message.content) &&
+      message.content.length === 0;
+    if (!isEmptySystem) return false;
+    if (
+      message.output_config != null &&
+      typeof message.output_config === "object" &&
+      !Array.isArray(message.output_config)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /**
  * Moves a directive-only system message (empty content array + message-level
  * `output_config`) off `messages[0]`, which Anthropic reserves for the initial
