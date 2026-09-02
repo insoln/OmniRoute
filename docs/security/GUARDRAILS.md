@@ -1,13 +1,14 @@
 ---
 title: "Guardrails"
-version: 3.8.50
-lastUpdated: 2026-08-24
+version: 3.8.51
+lastUpdated: 2026-08-29
 ---
 
 # Guardrails
 
 > **Source of truth:** `src/lib/guardrails/`
-> **Last updated:** 2026-08-24 — v3.8.50 (Video Bridge visual dedup hardening + focused captions)
+> **Last updated:** 2026-08-29 — v3.8.51 (Video Bridge transcript provenance is caller-declared,
+> not yet server-verified — clarified per #11661)
 
 Guardrails enforce safety, policy, and content transformations at the boundary
 between OmniRoute and upstream providers. Each guardrail can inspect (and
@@ -206,8 +207,12 @@ limits, runtime
 counters, and a guarded sample request. The Audio tab is also live: it exposes
 enablement, an STT-only model picker with Auto, timeout/max-clip limits, audio
 counters, and an `input_audio` sample test. The Video tab is functional: it reports
-the FFmpeg/ffprobe runtime state, persists enable/model/frame/video/timeout limits,
-filters the model picker to vision-capable models, and exposes video counters.
+the FFmpeg/ffprobe runtime state — one of four explicit UI states (`unknown` while
+the probe is in flight or could not complete, `restricted` on a non-loopback
+dashboard host where the probe is skipped client-side, `unavailable` once probed
+and confirmed missing, or `available` with the FFmpeg/ffprobe versions) — persists
+enable/model/frame/video/timeout limits, filters the model picker to vision-capable
+models, and exposes video counters.
 
 The former Vision Bridge card under AI settings is a compatibility link to the
 new page; it no longer owns a second copy of the form. Media Providers also
@@ -287,13 +292,26 @@ Runtime settings are DB-backed and Zod-validated:
 The shared cache remains controlled by `modalityBridgeCacheEnabled`,
 `modalityBridgeCacheTtlMinutes`, and `modalityBridgeCacheMaxEntries`.
 
-### Video Bridge (`videoBridge.ts`)
+### Video Bridge (`videoBridge.ts`, `videoBridgePipeline.ts`)
 
 Intercepts top-level video parts in Chat Completions `messages` and Responses
 API `input` before a target without known native video support is called.
 Supported shapes are `input_video`, `video_url`, `video_source`, HTTPS URLs,
 and `data:video/*;base64,...` data URIs. Plain filenames in text are not treated
 as video.
+
+`VideoBridgeGuardrail.preCall` (`videoBridge.ts`) owns request traversal, the
+capability/policy check, per-request aggregation, and the response payload.
+Per-video work — acquisition, the whole-result cache, describing a frame
+sequence (which fuses any caller-declared audio transcript), and per-attempt
+metrics/abort/cleanup — is hidden behind `processVideoPart` in
+`videoBridgePipeline.ts`, called once per video part inside `preCall`'s loop.
+That module also defines the explicit port boundaries `VideoMediaBrokerPort`
+(acquiring bytes and extracting sampled frames), `VideoAudioTranscriptionPort`
+(fusing a caller-declared audio transcript with the sampled captions), and
+`VideoDrilldownPort` (the frame drill-down persistence boundary; not yet wired
+into `processVideoPart` — only the separate `/api/modality-bridge/video/drilldown`
+route writes drill-down entries today).
 
 The public `/v1` request path never imports or invokes a subprocess. Remote
 videos are downloaded under a 50 MiB bound; inline base64 videos have a
@@ -437,7 +455,12 @@ OmniRoute never starts transcription from this metadata: validated cues are
 copied into the described result with source, confidence, and interval, and
 are rendered as untrusted observations alongside the frame captions. Invalid,
 out-of-range, or provenance-free text is rejected rather than mixed into the
-caption stream.
+caption stream. The `source` field is presently caller-declared, not
+server-verified: OmniRoute enforces that the value is one of the three
+allowed strings, but does not yet cryptographically confirm that an
+`embedded` or `audio-bridge` label actually came from a server-owned
+extraction. Treat `source` as an untrusted hint until that verification
+lands; do not build authorization decisions on it.
 
 An advanced caller may provide an already-authorized `audioTranscript` track
 for the same video. The fusion seam runs visual and audio observations under
@@ -452,6 +475,24 @@ guardrail metadata (`audioFusionRuns`/`audioFusionPartials`/
 fusion counters. The default Video Bridge path does not invoke speech-to-text
 or download a second media copy; without that explicit track, it remains
 video-only.
+
+**Transcript retention (opt-in feature, #12150 P1).** When a request renders any
+transcript cue (a caller-declared `transcript` or a fused `audioTranscript`), the
+guardrail marks it `videoBridgeObserved` and produces a redacted shadow of the
+video description — an identical rendering in which every cue's free-text body is
+replaced by `[redacted-video-transcript]`, built by substituting the structured
+cue field before the string is assembled (never by parsing the flattened text, so
+no cue content — adversarial or ordinary, including bodies containing `]` such as
+`[inaudible]`/`[music]` — can survive). The persisted call-log request body swaps
+each video-derived text part for that redacted shadow, matched by content
+equality (so it stays correct even after system-prompt/handoff/memory injection
+reshapes the message array); the body sent upstream to the model is unchanged.
+An observed request also populates no durable Memory (both request- and
+response-derived extraction are skipped), so the model's own reply cannot echo
+transcript text into Memory. Two further retention surfaces — the raw
+pre-guardrail client-request snapshot in the detailed-log artifact and
+`previous_response_id` continuation fail-closed — are tracked for a follow-up
+(P2) and are not yet closed.
 
 The internal `/api/modality-bridge/video/drilldown` lifecycle is a separate,
 loopback/token-authenticated cache substrate. Every operation also requires a

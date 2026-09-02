@@ -40,6 +40,12 @@ export interface RadarCatalogResult {
   /** Feed metadata — null when falling back to baseline. */
   meta: {
     version: string;
+    /**
+     * Date the feed's data was built. Null for a cache row written before the
+     * column existed — unknown, never substituted by `fetchedAt`, which only
+     * says when this install downloaded it.
+     */
+    generatedAt: string | null;
     tier: string;
     fetchedAt: string;
   } | null;
@@ -48,7 +54,13 @@ export interface RadarCatalogResult {
 /** Injectable deps for testing. */
 export interface GetRadarCatalogDeps {
   getFlag?: (key: string) => boolean;
-  getCache?: () => { version: string; tier: string; payload: string; fetchedAt: string } | null;
+  getCache?: () => {
+    version: string;
+    generatedAt?: string | null;
+    tier: string;
+    payload: string;
+    fetchedAt: string;
+  } | null;
   baseline?: MergedEntry[];
   localOverrides?: Map<string, Partial<MergedEntry>>;
   tombstones?: Set<string>;
@@ -142,10 +154,35 @@ export function getRadarCatalog(deps: GetRadarCatalogDeps = {}): RadarCatalogRes
     entries,
     meta: {
       version: cache.version,
+      generatedAt: cache.generatedAt ?? null,
       tier: cache.tier,
       fetchedAt: cache.fetchedAt,
     },
   };
+}
+
+/** Injectable deps for `getCatalogWithoutOverlay`, same shape as the catalog resolver's. */
+export interface GetCatalogWithoutOverlayDeps {
+  baseline?: MergedEntry[];
+  getLocalState?: () => RadarLocalMergeState;
+}
+
+/**
+ * The catalog with no feed applied: the shipped baseline seen through the
+ * operator's own local Radar state (renames, disabled models, tombstones).
+ *
+ * This is the correct fallback when a cached feed exists but is too old to
+ * serve. Recomputing from the raw baseline instead would drop that state, and
+ * the totals honour it — `computeFreeModelTotals` treats `enabled: false` as
+ * absent, and `applyFeed` skips tombstoned entries — so models the operator
+ * removed would silently reappear in the published numbers.
+ */
+export function getCatalogWithoutOverlay(deps: GetCatalogWithoutOverlayDeps = {}): MergedEntry[] {
+  const { baseline: baselineInput, getLocalState: getLocalStateFn = getRadarLocalMergeState } =
+    deps;
+  const baseline = baselineInput ?? baselineToMergedEntries(FREE_MODEL_BUDGETS);
+  const { localOverrides, tombstones } = getLocalStateFn();
+  return applyFeed({ baseline, feed: [], localOverrides, tombstones });
 }
 
 // ---------------------------------------------------------------------------

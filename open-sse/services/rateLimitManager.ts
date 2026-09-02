@@ -97,6 +97,13 @@ let initialized = false;
 
 let currentRequestQueueSettings: RequestQueueSettings = DEFAULT_RESILIENCE_SETTINGS.requestQueue;
 export const ZAI_WEB_REQUEST_QUEUE_MAX_WAIT_MS = 60_000;
+// MaxAI proxies reasoning models (deepseek-r1, gpt-5.6-thinking, grok-4.5,
+// gemini-3.1-pro-preview, grok-4-1-fast-reasoning) whose single upstream turn
+// legitimately runs tens of seconds to minutes. The 15s default execution
+// expiration (Bottleneck `expiration`, applied AFTER dispatch) kills those mid
+// think and surfaces a spurious local 504. Floor MaxAI at 5 min — the same
+// ceiling waitForCooldown.budgetMs uses — so slow reasoning turns complete.
+export const MAXAI_REQUEST_QUEUE_MAX_WAIT_MS = 300_000;
 
 const limiterEffectiveSettings = new WeakMap<Bottleneck, Bottleneck.ConstructorOptions>();
 const preservedReplacementSettings = new Map<string, Bottleneck.ConstructorOptions>();
@@ -166,14 +173,29 @@ export function resolveRequestQueueMaxWaitMs(
   configuredMaxWaitMs: number = currentRequestQueueSettings.maxWaitMs,
   connectionId?: string
 ): number {
-  const legacyDefault =
-    provider.trim().toLowerCase() === "zai-web"
-      ? Math.max(configuredMaxWaitMs, ZAI_WEB_REQUEST_QUEUE_MAX_WAIT_MS)
-      : configuredMaxWaitMs;
+  const p = provider.trim().toLowerCase();
+  let legacyDefault = configuredMaxWaitMs;
+  if (p === "zai-web") {
+    legacyDefault = Math.max(configuredMaxWaitMs, ZAI_WEB_REQUEST_QUEUE_MAX_WAIT_MS);
+  } else if (p === "maxai" || p === "mx") {
+    // MaxAI's slow reasoning models legitimately need up to ~5 min; floor the
+    // per-request execution budget so they aren't cut off early.
+    legacyDefault = Math.max(configuredMaxWaitMs, MAXAI_REQUEST_QUEUE_MAX_WAIT_MS);
+  }
   const override = connectionId
     ? connectionRateLimitOverrides.get(connectionId)?.maxWaitMs
     : undefined;
   return resolveOverride(override, legacyDefault);
+}
+
+/**
+ * Limiter-managed execution backstop (Bottleneck `expiration`). Starts only
+ * after a job leaves QUEUED; bounds execution, never queue wait. Kept strictly
+ * separate from the queue-wait budget (`maxWaitMs`) so the backstop cannot
+ * undercut upstream fetch-start timeouts on non-incremental gateways.
+ */
+export function resolveExecutionMaxWaitMs(): number {
+  return currentRequestQueueSettings.executionMaxWaitMs;
 }
 
 function buildLimiterDefaults() {
@@ -338,7 +360,8 @@ export async function initializeRateLimits() {
   applyBottleneckHeartbeatPatch();
 
   try {
-    const { getCachedProviderConnections, getSettings } = await import("@/lib/localDb");
+    const { getCachedProviderConnections } = await import("@/lib/db/readCache");
+    const { getSettings } = await import("@/lib/db/settings");
     const [connections, settings] = await Promise.all([
       getCachedProviderConnections(),
       getSettings(),
@@ -385,7 +408,7 @@ export async function applyRequestQueueSettings(nextSettings: RequestQueueSettin
   currentRequestQueueSettings = { ...nextSettings };
   // Global policy changes invalidate snapshots from the previous generation.
   preservedReplacementSettings.clear();
-  const { getCachedProviderConnections } = await import("@/lib/localDb");
+  const { getCachedProviderConnections } = await import("@/lib/db/readCache");
   const connections = await getCachedProviderConnections();
   // Also discard any snapshot created while the asynchronous DB read yielded.
   preservedReplacementSettings.clear();
@@ -562,10 +585,13 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
   await awaitProviderDefaultSlot(provider, connectionId, signal, maxWaitMs);
 
   const limiter = getLimiter(provider, connectionId, model);
-  // Bottleneck's `expiration` starts only after a job leaves QUEUED. The
-  // legacy maxWaitMs setting therefore bounds limiter-managed execution; it
-  // is not a queue-wait deadline.
-  const executionExpirationMs = maxWaitMs;
+  // Bottleneck's `expiration` starts only after a job leaves QUEUED, so it
+  // bounds limiter-managed execution — not queue wait. It is therefore fed by
+  // the dedicated execution backstop (`requestQueue.executionMaxWaitMs`),
+  // never by the queue-wait budget: non-incremental gateways legitimately run
+  // for minutes before first bytes, and an expiration at the queue budget
+  // killed them mid-flight (false 504s on opencode-go/glm-5.3-flash).
+  const executionExpirationMs = resolveExecutionMaxWaitMs();
   const scheduleOpts =
     executionExpirationMs && executionExpirationMs > 0 ? { expiration: executionExpirationMs } : {};
 
@@ -641,7 +667,7 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
       throw markLocalRateLimitError(
         new Error(
           `Request exceeded OmniRoute's local rate-limit execution expiration ` +
-            `(legacy resilienceSettings.requestQueue.maxWaitMs=${executionExpirationMs}ms) for ` +
+            `(resilienceSettings.requestQueue.executionMaxWaitMs=${executionExpirationMs}ms) for ` +
             `${model ? `${provider}/${model}` : provider}. Bottleneck applies this deadline only ` +
             `after dispatch; it does not bound queue wait and is not an upstream-generated timeout.`,
           { cause: err }

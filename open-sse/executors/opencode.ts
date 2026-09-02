@@ -11,7 +11,11 @@ import {
   injectReasoningContentForThinkingModel,
   isThinkingMessageModel,
 } from "../utils/reasoningContentInjector.ts";
-import { runWithDirectFetchContext, runWithProxyContext } from "../utils/proxyFetch.ts";
+import {
+  hasAmbientProxyContext,
+  runWithDirectFetchContext,
+  runWithProxyContext,
+} from "../utils/proxyFetch.ts";
 import { forwardOpencodeClientHeaders } from "../utils/opencodeHeaders.ts";
 import {
   type AccountProxyConfig,
@@ -505,9 +509,15 @@ export class OpencodeExecutor extends BaseExecutor {
       // else passes untouched: this path deliberately preserves BaseExecutor's
       // intra-URL 429 retries (no skipUpstreamRetry here).
       if (this.accounts.length === 1 && !hasProxies) {
-        const single = (await runWithDirectFetchContext(() =>
-          super.execute(input)
-        )) as HttpExecuteResult;
+        // #11894: a connection-level proxy assignment (proxy_assignments) reaches
+        // the executor as the AMBIENT proxy context — the chat handler wraps
+        // execute() in runWithProxyContext(proxyInfo.proxy, ...) before we run.
+        // Only pin direct egress when no such context exists; otherwise let the
+        // ambient proxy stand instead of clobbering it with the direct sentinel.
+        const dispatch = () => super.execute(input);
+        const single = (await (hasAmbientProxyContext()
+          ? dispatch()
+          : runWithDirectFetchContext(dispatch))) as HttpExecuteResult;
         if (single.response.status === 400) {
           let bodyText: string | null = null;
           try {
@@ -887,18 +897,23 @@ export class OpencodeExecutor extends BaseExecutor {
     }
     if (modifiedBody && typeof modifiedBody === "object" && !Array.isArray(modifiedBody)) {
       const mb = modifiedBody as Record<string, unknown>;
-      if (Array.isArray(mb.tools) && mb.tools.length > 128) {
-        mb.tools = mb.tools.slice(0, 128);
-      }
-    }
-    if (modifiedBody && typeof modifiedBody === "object" && !Array.isArray(modifiedBody)) {
-      const mb = modifiedBody as Record<string, unknown>;
       const parsed = parseEffortLevel(model);
       if (parsed) {
-        mb.model = parsed.baseModel;
-        if (mb.reasoning_effort === undefined) {
-          mb.reasoning_effort = parsed.effort;
+        const deepseekFamily =
+          parsed.baseModel === "deepseek-v4-pro" || parsed.baseModel === "deepseek-v4-flash";
+        if (deepseekFamily) {
+          // DeepSeek via opencode-go proxies the native DeepSeek contract, which
+          // accepts a flat reasoning_effort field (#4647).
+          mb.model = parsed.baseModel;
+          if (mb.reasoning_effort === undefined) {
+            mb.reasoning_effort = parsed.effort;
+          }
         }
+        // #10788: every other family's ONLY native effort mechanism is the
+        // -<tier> suffix in the model id itself (the ids `opencode models
+        // opencode-go --verbose` lists). The opencode-go ChatCompletionRequest
+        // carries no flat reasoning_effort field, so rewriting to the base id
+        // silently dropped the tier — forward the aliased id verbatim instead.
       }
     }
     // #1543 / upstream PR #1099: thinking-mode upstreams routed through OpenCode

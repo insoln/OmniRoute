@@ -75,10 +75,10 @@ export async function validationWrite(url: string, init: RequestInit, isLocal: b
 // surfaces as a `provider.validation.ssrf_blocked` audit event + a security warning in
 // the UI) when it is a GENUINE SSRF/guard block — not for every outbound-guard 503.
 // A blocked redirect (REDIRECT_BLOCKED) to a PUBLIC host is benign: the redirect was
-// never followed, so no SSRF occurred. Web-cookie providers like qwen-web answer their
-// probe with a 307 to a public host, which used to be mislabeled as an SSRF block
-// (#3288 / #3758). Only treat a blocked redirect as a security event when its target is
-// a private/internal host.
+// never followed, so no SSRF occurred. Some web-cookie providers answer their probe
+// with a 307 to a public host, which used to be mislabeled as an SSRF block (#3288 /
+// #3758). Only treat a blocked redirect as a security event when its target is a
+// private/internal host.
 export function isSecurityBlockError(error: unknown): boolean {
   if (!(error instanceof SafeOutboundFetchError)) return false;
   if (error.code === "URL_GUARD_BLOCKED" || error.code === "INVALID_URL") return true;
@@ -120,7 +120,6 @@ const WEB_COOKIE_PROVIDERS_WITH_UNRELIABLE_MODELS_PROBE = new Set(["lmarena"]);
 // WEB_COOKIE_PROVIDERS_WITH_UNRELIABLE_MODELS_PROBE/REDIRECT_BLOCKED path above (#7542).
 export const WEB_COOKIE_PROVIDERS_WITHOUT_MODELS_API = new Set([
   "huggingchat",
-  "chatgpt-web",
   "grok-web",
   "notion-web",
   "t3-web",
@@ -128,6 +127,18 @@ export const WEB_COOKIE_PROVIDERS_WITHOUT_MODELS_API = new Set([
   "copilot-web",
   "copilot-m365-web",
 ]);
+
+// #12107 — web-cookie providers whose registry entry exists to publish a model catalog
+// (so `/v1/models` and `/v1/providers/{id}/models` list something) but whose `baseUrl`
+// is a browser console, not an API host. gemini-business's entry points at
+// business.gemini.google/home: the executor only uses that origin to derive a
+// per-tenant StreamGenerate path (`/home/cid/{CID}/_/BardChatUi/...`), so there is no
+// side-effect-free auth probe on the host — `${baseUrl}/models` is a page Google never
+// served, and a 401/403 from a console page is not a credential signal either. Unlike
+// WEB_COOKIE_PROVIDERS_WITHOUT_MODELS_API these providers are therefore not probed at
+// all: validation stays the honest "unsupported" it reported before the registry entry
+// existed, decided BEFORE any network call.
+export const WEB_COOKIE_PROVIDERS_WITHOUT_AUTH_PROBE = new Set(["gemini-business"]);
 
 export function toWebCookieValidationErrorResult(provider: string, error: unknown) {
   if (

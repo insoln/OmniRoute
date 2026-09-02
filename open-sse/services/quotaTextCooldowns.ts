@@ -36,15 +36,19 @@ export function isSubscriptionQuotaText(lower: string, provider?: string | null)
     lower.includes("claude pro usage limit") ||
     lower.includes("you've reached your usage limit") ||
     lower.includes("you have reached your usage limit") ||
+    lower.includes("exceeds your plan") ||
+    lower.includes("plan limit") ||
+    lower.includes("plan's set usage limit") ||
+    lower.includes("plan limit exceeded") ||
+    lower.includes("usage limit exceeded") ||
     // Native Claude OAuth uses this otherwise-generic 429 wording for an
     // exhausted subscription window. Keep it provider-scoped: other upstreams
     // can use the same phrase for a short RPM throttle.
-    (provider === "claude" &&
-      lower.includes("this request would exceed your account's rate limit"))
+    (provider === "claude" && lower.includes("this request would exceed your account's rate limit"))
   );
 }
 
-const SUBSCRIPTION_QUOTA_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
+export const SUBSCRIPTION_QUOTA_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
 
 /**
  * Builds the QUOTA_EXHAUSTED fallback for the subscription-quota text above.
@@ -108,9 +112,12 @@ export function isWeeklyUsageLimitText(lower: string): boolean {
 
 const MAX_WEEKLY_QUOTA_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;
 
-export function buildWeeklyQuotaFallback(errorStr: string): QuotaTextFallback | null {
+export function buildWeeklyQuotaFallback(
+  errorStr: string,
+  nowMs: number = Date.now()
+): QuotaTextFallback | null {
   if (!isWeeklyUsageLimitText(errorStr.toLowerCase())) return null;
-  const parsedResetMs = parseDayGranularityResetMs(errorStr, MAX_WEEKLY_QUOTA_COOLDOWN_MS);
+  const parsedResetMs = parseDayGranularityResetMs(errorStr, MAX_WEEKLY_QUOTA_COOLDOWN_MS, nowMs);
   const cooldownMs =
     typeof parsedResetMs === "number" && parsedResetMs > 0
       ? parsedResetMs
@@ -120,7 +127,8 @@ export function buildWeeklyQuotaFallback(errorStr: string): QuotaTextFallback | 
     cooldownMs,
     reason: RateLimitReason.QUOTA_EXHAUSTED,
     usedUpstreamRetryHint: typeof parsedResetMs === "number" && parsedResetMs > 0,
-    quotaResetHintMs: typeof parsedResetMs === "number" && parsedResetMs > 0 ? parsedResetMs : undefined,
+    quotaResetHintMs:
+      typeof parsedResetMs === "number" && parsedResetMs > 0 ? parsedResetMs : undefined,
   };
 }
 

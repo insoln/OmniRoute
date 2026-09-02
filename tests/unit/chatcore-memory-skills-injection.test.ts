@@ -9,14 +9,14 @@ import path from "node:path";
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-mem-skills-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
 
-const { getSkillsProviderForFormat, injectMemoryAndSkills } =
+const { getSkillsProviderForFormat, injectMemoryAndSkills, sortToolsByName } =
   await import("../../open-sse/handlers/chatCore/memorySkillsInjection.ts");
 const { FORMATS } = await import("../../open-sse/translator/formats.ts");
 const core = await import("../../src/lib/db/core.ts");
 
 test.after(() => {
   core.resetDbInstance();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 // ─── getSkillsProviderForFormat (pure switch) ────────────────────────────────
@@ -36,6 +36,20 @@ test("getSkillsProviderForFormat maps OPENAI and any unknown format -> openai (d
   assert.equal(getSkillsProviderForFormat("codex"), "openai");
   assert.equal(getSkillsProviderForFormat("totally-unknown"), "openai");
   assert.equal(getSkillsProviderForFormat(""), "openai");
+});
+
+test("sortToolsByName sorts tools deterministically by function name or top-level name", () => {
+  const unsorted = [
+    { function: { name: "z_tool" } },
+    { name: "a_tool" },
+    { function: { name: "m_tool" } },
+  ];
+  const sorted = sortToolsByName(unsorted);
+  assert.deepEqual(sorted, [
+    { name: "a_tool" },
+    { function: { name: "m_tool" } },
+    { function: { name: "z_tool" } },
+  ]);
 });
 
 // ─── injectMemoryAndSkills ───────────────────────────────────────────────────
@@ -193,7 +207,8 @@ test("injectMemoryAndSkills does not inject server memory tools for stream reque
   });
 
   assert.equal(result.memorySettings?.enabled, true);
-  const tools = (result.body.tools as { function?: { name?: string }; name?: string }[] | undefined) ?? [];
+  const tools =
+    (result.body.tools as { function?: { name?: string }; name?: string }[] | undefined) ?? [];
   const toolNames = tools.map((tool) => tool.function?.name ?? tool.name);
   for (const memoryTool of MEMORY_BUILTIN_TOOL_NAMES) {
     assert.equal(
@@ -230,7 +245,8 @@ test("injectMemoryAndSkills does not inject memory tools when memory is disabled
     log: { debug: () => {} },
   });
 
-  const tools = (result.body.tools as { function?: { name?: string }; name?: string }[] | undefined) ?? [];
+  const tools =
+    (result.body.tools as { function?: { name?: string }; name?: string }[] | undefined) ?? [];
   const toolNames = tools.map((tool) => tool.function?.name ?? tool.name);
   for (const memoryTool of MEMORY_BUILTIN_TOOL_NAMES) {
     assert.equal(

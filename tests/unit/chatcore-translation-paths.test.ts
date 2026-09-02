@@ -322,7 +322,7 @@ async function resetStorage() {
   resetBackgroundStats();
   globalThis.setTimeout = originalSetTimeout;
   core.resetDbInstance();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 }
 
@@ -448,7 +448,7 @@ test.after(async () => {
   resetAccountSemaphores();
   await flushAsyncSideEffects();
   await resetStorage();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 test("chatCore times out upstream execution before provider response headers", async () => {
   // This test asserts pendingDetail.providerRequest — only attached when the
@@ -456,7 +456,7 @@ test("chatCore times out upstream execution before provider response headers", a
   // (fresh-DB default leaves it off → the waitFor below would never resolve;
   // failed deterministically on CI and on an isolated run, incl. at v3.8.18).
   await settingsDb.updateSettings({ call_log_pipeline_enabled: true });
-  const executor = getExecutor("openai");
+  const executor = await getExecutor("openai");
   const originalGetTimeoutMs = executor.getTimeoutMs?.bind(executor);
   executor.getTimeoutMs = () => 200;
 
@@ -541,11 +541,11 @@ test("chatCore can disable pipeline stream chunk capture through environment", a
 test("chatCore keeps Responses-native Codex payloads in native passthrough mode", async () => {
   const { call, result } = await invokeChatCore({
     provider: "codex",
-    model: "gpt-5.1-codex",
+    model: "gpt-5.6-sol",
     endpoint: "/v1/responses",
     credentials: { accessToken: "codex-token", providerSpecificData: {} },
     body: {
-      model: "gpt-5.1-codex",
+      model: "gpt-5.6-sol",
       input: "ship it",
       instructions: "custom system prompt",
       store: true,
@@ -1111,14 +1111,14 @@ test("chatCore captures streaming no-tool reasoning for Responses replay", async
 test("chatCore automatically preserves provider-generated opaque reasoning for Codex", async () => {
   const { call, result } = await invokeChatCore({
     provider: "codex",
-    model: "gpt-5.1-codex",
+    model: "gpt-5.6-sol",
     endpoint: "/v1/responses",
     credentials: {
       accessToken: "codex-token",
       providerSpecificData: {},
     },
     body: {
-      model: "gpt-5.1-codex",
+      model: "gpt-5.6-sol",
       stream: false,
       input: [
         { id: "rs_valid", type: "reasoning", encrypted_content: "encrypted-blob" },
@@ -1904,7 +1904,8 @@ test("chatCore downgrades unsupported xhigh effort for assistant-prefill OpenAI-
 
   assert.equal(result.success, true);
   assert.equal(call.body.model, "glm-5.1");
-  assert.equal(call.body.reasoning_effort, "high");
+  // GLM 5.1+ natively uses `max` as the top tier (#11875); xhigh maps to max.
+  assert.equal(call.body.reasoning_effort, "max");
 });
 test("chatCore logs chat completions endpoint as OpenAI protocol", async () => {
   const { call, result } = await invokeChatCore({
@@ -2503,7 +2504,7 @@ test("chatCore preserves Codex dual-window scope cooldowns on 429 responses", as
   const resetAt7d = new Date(Date.now() + 3_600_000).toISOString();
   const { result } = await invokeChatCore({
     provider: "codex",
-    model: "gpt-5.1-codex",
+    model: "gpt-5.6-sol",
     endpoint: "/v1/responses",
     connectionId: connection.id,
     credentials: {
@@ -2511,7 +2512,7 @@ test("chatCore preserves Codex dual-window scope cooldowns on 429 responses", as
       providerSpecificData: {},
     },
     body: {
-      model: "gpt-5.1-codex",
+      model: "gpt-5.6-sol",
       input: "persist quota",
       stream: false,
     },

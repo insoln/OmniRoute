@@ -12,6 +12,7 @@ import { getApiKeys } from "../db/apiKeys";
 import { getPendingRequests } from "./usageHistory";
 import { getAccountDisplayName } from "@/lib/display/names";
 import { calculateCost } from "./costCalculator";
+import { isFlatRateProvider } from "./flatRateProviders";
 import { getRawDataCutoffDate, isAggregationEnabled } from "./aggregateHistory";
 import { toNumber } from "@/shared/utils/numeric";
 
@@ -160,7 +161,10 @@ async function calculateAggregateCost(row: JsonRecord): Promise<number> {
     },
     { provider, serviceTier, flatRateAsZero: true }
   );
-  return storedCost + calculatedCost;
+  // daily_usage_summary stores API-equivalent value so the dedicated costs
+  // view can preserve history. This legacy stats surface keeps billed-cost
+  // semantics for flat-rate subscriptions.
+  return (isFlatRateProvider(provider) ? 0 : storedCost) + calculatedCost;
 }
 
 function addUsage(
@@ -285,7 +289,7 @@ export async function getUsageStats() {
   const sourceSql = buildUsageSourceSql(aggregationEnabled);
   const sourceParams = aggregationEnabled && cutoffDate ? [cutoffDate, cutoffDate] : [];
 
-  const { getProviderConnections } = await import("@/lib/localDb");
+  const { getProviderConnections } = await import("@/lib/db/providers");
   let allConnections: unknown[] = [];
   try {
     const loadedConnections = await getProviderConnections();
