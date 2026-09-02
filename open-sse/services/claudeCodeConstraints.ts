@@ -111,6 +111,76 @@ export function relocateDirectiveOnlyMessages(payload: Record<string, unknown>):
   ];
 }
 
+/**
+ * Hoists only the initial system/developer run into Anthropic's top-level `system` field.
+ * Directive-only entries remain in `messages` for the positional relocation pass, and
+ * mid-conversation system entries remain untouched for the context-1m beta path.
+ */
+export function hoistLeadingSystemMessages(payload: Record<string, unknown>): void {
+  if (!Array.isArray(payload.messages) || payload.messages.length === 0) return;
+  const messages = payload.messages as Array<Record<string, unknown>>;
+  const isSystemRole = (role: unknown): boolean =>
+    typeof role === "string" &&
+    (role.toLowerCase() === "system" || role.toLowerCase() === "developer");
+
+  let runEnd = 0;
+  while (runEnd < messages.length && isSystemRole(messages[runEnd]?.role)) runEnd++;
+  if (runEnd === 0) return;
+
+  const extraBlocks: Array<Record<string, unknown>> = [];
+  const directives: Array<Record<string, unknown>> = [];
+  for (const message of messages.slice(0, runEnd)) {
+    const outputConfig = message.output_config;
+    const isDirectiveOnly =
+      Array.isArray(message.content) &&
+      message.content.length === 0 &&
+      outputConfig != null &&
+      typeof outputConfig === "object" &&
+      !Array.isArray(outputConfig);
+    if (isDirectiveOnly) {
+      directives.push(message);
+      continue;
+    }
+
+    if (typeof message.content === "string" && message.content.length > 0) {
+      extraBlocks.push({ type: "text", text: message.content });
+    } else if (Array.isArray(message.content)) {
+      for (const block of message.content) {
+        if (block == null || typeof block !== "object") continue;
+        const contentBlock = block as Record<string, unknown>;
+        if (
+          contentBlock.type === "text" &&
+          typeof contentBlock.text === "string" &&
+          contentBlock.text.length > 0
+        ) {
+          extraBlocks.push({ ...contentBlock });
+        }
+      }
+    }
+
+    if (
+      payload.output_config == null &&
+      outputConfig != null &&
+      typeof outputConfig === "object" &&
+      !Array.isArray(outputConfig)
+    ) {
+      payload.output_config = outputConfig;
+    }
+  }
+
+  if (extraBlocks.length > 0) {
+    const existingSystem = payload.system;
+    if (typeof existingSystem === "string" && existingSystem.length > 0) {
+      payload.system = [{ type: "text", text: existingSystem }, ...extraBlocks];
+    } else if (Array.isArray(existingSystem)) {
+      payload.system = [...existingSystem, ...extraBlocks];
+    } else {
+      payload.system = extraBlocks;
+    }
+  }
+  payload.messages = [...directives, ...messages.slice(runEnd)];
+}
+
 export function disableThinkingIfToolChoiceForced(body: Record<string, unknown>): void {
   const toolChoice = body.tool_choice as Record<string, unknown> | string | undefined;
   if (!toolChoice) return;

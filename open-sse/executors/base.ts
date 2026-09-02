@@ -59,6 +59,7 @@ import {
 import type { ProviderRequestDefaults } from "../services/providerRequestDefaults.ts";
 import { signRequestBody } from "../services/claudeCodeCCH.ts";
 import {
+  hoistLeadingSystemMessages,
   normalizeCacheControlTtl,
   relocateDirectiveOnlyMessages,
 } from "../services/claudeCodeConstraints.ts";
@@ -1352,11 +1353,11 @@ export class BaseExecutor {
         // before fingerprinting and CCH signing serialize the body.
         if (this.provider === "claude" || usesClaudeCodeProtocol) {
           const tb = transformedBody as Record<string, unknown>;
-          // Final wire-body guard: chatCore already relocates Claude Code's
-          // directive-only system envelope, but direct executor calls and later
-          // payload transforms can bypass or undo that repair. Anthropic rejects
-          // the envelope at messages[0], so enforce the positional invariant at
-          // the last shared chokepoint before fingerprinting and CCH signing.
+          // Final wire-body guard: chatCore normally hoists initial prompt roles,
+          // but direct executor calls and later payload transforms can bypass or
+          // undo that repair. Preserve valid directive-only messages while lifting
+          // real prompt content into Anthropic's top-level system parameter.
+          hoistLeadingSystemMessages(tb);
           relocateDirectiveOnlyMessages(tb);
           enforceThinkingTemperature(tb);
         }

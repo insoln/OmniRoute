@@ -20,6 +20,7 @@ test.after(() => {
 type CapturedBody = {
   messages?: Array<Record<string, unknown>>;
   output_config?: Record<string, unknown>;
+  system?: string | Array<Record<string, unknown>>;
 };
 
 function captureFetchBodies() {
@@ -32,7 +33,12 @@ function captureFetchBodies() {
       headers: { "Content-Type": "application/json" },
     });
   }) as typeof globalThis.fetch;
-  return { bodies, restore: () => void (globalThis.fetch = original) };
+  return {
+    bodies,
+    restore: () => {
+      globalThis.fetch = original;
+    },
+  };
 }
 
 async function executeClaude(body: Record<string, unknown>) {
@@ -40,9 +46,67 @@ async function executeClaude(body: Record<string, unknown>) {
     model: "claude-opus-5",
     body,
     stream: false,
-    credentials: { apiKey: "test-claude-key" },
+    credentials: { accessToken: "sk-ant-oat-test-token" },
+    clientHeaders: { "x-app": "cli" },
   });
 }
+
+test("final Claude dispatch hoists a leading non-empty system message", async () => {
+  const { bodies, restore } = captureFetchBodies();
+
+  try {
+    await executeClaude({
+      model: "claude-opus-5",
+      max_tokens: 64,
+      system: [{ type: "text", text: "Existing top-level prompt." }],
+      tools: [
+        {
+          name: "lookup",
+          description: "Look up a value",
+          input_schema: { type: "object", properties: {} },
+        },
+      ],
+      messages: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "text",
+              text: "Escaped initial prompt.",
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        },
+        { role: "user", content: [{ type: "text", text: "hello" }] },
+      ],
+    });
+  } finally {
+    restore();
+  }
+
+  const captured = bodies.at(-1);
+  assert.ok(captured, "fetch did not capture a request body");
+  assert.equal(captured.messages?.[0]?.role, "user");
+  assert.equal(
+    captured.messages?.some((message) =>
+      ["system", "developer"].includes(String(message.role).toLowerCase())
+    ),
+    false
+  );
+  assert.ok(Array.isArray(captured.system), "system must be serialized as content blocks");
+  assert.deepEqual(
+    captured.system.slice(-2),
+    [
+      { type: "text", text: "Existing top-level prompt." },
+      {
+        type: "text",
+        text: "Escaped initial prompt.",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+    ],
+    "existing and hoisted system prompts must retain their order and cache boundary"
+  );
+});
 
 test("final Claude dispatch relocates leading directive-only messages", async () => {
   const { bodies, restore } = captureFetchBodies();

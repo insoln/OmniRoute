@@ -497,9 +497,25 @@ You are continuing a conversation that was transferred from another account due 
 The context above contains a concise summary of the prior work. Continue seamlessly from where the session left off.`;
 }
 
+function injectClaudeSystemHandoff(
+  body: Record<string, unknown>,
+  handoffContent: string
+): Record<string, unknown> {
+  const handoffBlock = { type: "text", text: handoffContent };
+  const existingSystem = body.system;
+  const system = Array.isArray(existingSystem)
+    ? [...existingSystem, handoffBlock]
+    : typeof existingSystem === "string" && existingSystem.length > 0
+      ? [{ type: "text", text: existingSystem }, handoffBlock]
+      : [handoffBlock];
+
+  return { ...body, system };
+}
+
 export function injectHandoffIntoBody(
   body: Record<string, unknown>,
-  payload: HandoffPayload
+  payload: HandoffPayload,
+  sourceFormat?: string | null
 ): Record<string, unknown> {
   const handoffContent = buildHandoffSystemMessage(payload);
   const isResponsesRequest =
@@ -524,6 +540,10 @@ export function injectHandoffIntoBody(
     }
 
     return nextBody;
+  }
+
+  if (sourceFormat === "claude") {
+    return injectClaudeSystemHandoff(body, handoffContent);
   }
 
   const handoffMessage = {
@@ -801,7 +821,8 @@ export function injectUniversalHandoffBody(
   prevModel: string,
   currModel: string,
   reason: string,
-  existingPayload?: HandoffPayload | null
+  existingPayload?: HandoffPayload | null,
+  sourceFormat?: string | null
 ): Record<string, unknown> {
   const handoffContent = buildUniversalHandoffSystemMessage(
     prevModel,
@@ -830,6 +851,10 @@ export function injectUniversalHandoffBody(
       return rest;
     }
     return nextBody;
+  }
+
+  if (sourceFormat === "claude") {
+    return injectClaudeSystemHandoff(body, handoffContent);
   }
 
   const handoffMessage = {
