@@ -36,6 +36,7 @@ import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import { notifyCompressionFailOpen } from "../../failOpenNotifier.ts";
+import { sanitizeErrorMessage } from "../../../../utils/errorSanitization.ts";
 import { LLMLINGUA_WORKER_TIMEOUT_MS, LLMLINGUA_WORKER_IDLE_MS } from "./constants.ts";
 import { resolveLlmlinguaModel } from "./modelStore.ts";
 import { packMemberInstalled } from "../../../../utils/optionalPacks.ts";
@@ -116,6 +117,10 @@ function runtimeAnchors(): string[] {
 // ─── optional-deps gate (memoized) ──────────────────────────────────────────────
 
 let _depsAvailable: boolean | null = null;
+let workerFactory: (workerFile: URL, options: { execArgv: string[] }) => Worker = (
+  workerFile,
+  options
+) => new Worker(workerFile, options);
 
 /**
  * Lazily (and once) check whether the optional LLMLingua dependency stack is installed,
@@ -243,7 +248,7 @@ function ensureWorker(): Worker {
   if (worker) return worker;
 
   const { workerFile, execArgv } = resolveWorkerFile();
-  const w = new Worker(llmlinguaWorkerSpecifier(workerFile), { execArgv });
+  const w = workerFactory(llmlinguaWorkerSpecifier(workerFile), { execArgv });
 
   w.on("message", (reply: WorkerReply) => {
     const entry = pending.get(reply.id);
@@ -299,7 +304,7 @@ function pump(): void {
   } catch (error) {
     // Spawn failed → fail-open this item and continue draining the queue.
     notifyCompressionFailOpen(
-      `llmlingua worker spawn failed: ${error instanceof Error ? error.message : String(error)}`
+      `llmlingua worker spawn failed: ${sanitizeErrorMessage(error instanceof Error ? error.message : error)}`
     );
     busy = false;
     item.resolve(item.text);
@@ -345,9 +350,7 @@ function pump(): void {
   } catch (error) {
     // postMessage failed → fail-open this item and respawn.
     notifyCompressionFailOpen(
-      `llmlingua worker postMessage failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`
+      `llmlingua worker postMessage failed: ${sanitizeErrorMessage(error instanceof Error ? error.message : error)}`
     );
     clearTimeout(timer);
     pending.delete(id);
@@ -393,4 +396,21 @@ export function __resetLlmlinguaWorkerForTests(): void {
   resetWorker();
   _depsAvailable = null;
   nextId = 1;
+}
+
+/**
+ * Internal: override the worker constructor / the optional-deps gate for tests so
+ * the spawn- and postMessage-failure paths run without the real deps installed.
+ * Pass `null` to restore the defaults. Not part of the public contract.
+ */
+export function __setLlmlinguaWorkerHarnessForTests(harness: {
+  factory: ((workerFile: URL, options: { execArgv: string[] }) => Worker) | null;
+  depsAvailable: boolean | null;
+}): void {
+  if (harness.factory === null) {
+    workerFactory = (workerFile, options) => new Worker(workerFile, options);
+  } else if (harness.factory) {
+    workerFactory = harness.factory;
+  }
+  _depsAvailable = harness.depsAvailable;
 }

@@ -70,6 +70,7 @@ export { resolveCacheAwareConfig } from "./cacheAwareConfig.ts";
 // and the llmlingua worker can import it without an import cycle (strategySelector
 // statically pulls the engines; the pool must stay importable from underneath it).
 import { notifyCompressionFailOpen } from "./failOpenNotifier.ts";
+import { sanitizeErrorMessage } from "../../utils/errorSanitization.ts";
 export {
   notifyCompressionFailOpen,
   __resetCompressionFailOpenNotifierForTests,
@@ -551,7 +552,9 @@ async function runCompressionAsync(
       const { runCompressionInWorker } = await import("./compressionWorkerPool.ts");
       return await runCompressionInWorker(body, mode, workerOptions, options?.onEngineStep);
     } catch (error) {
-      notifyCompressionFailOpen(error instanceof Error ? error.message : String(error));
+      notifyCompressionFailOpen(
+        sanitizeErrorMessage(error instanceof Error ? error.message : error)
+      );
       return { body, compressed: false, stats: null };
     }
   }
