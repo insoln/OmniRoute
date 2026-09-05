@@ -532,10 +532,39 @@ You are continuing a conversation that was transferred from another account due 
 The context above contains a concise summary of the prior work. Continue seamlessly from where the session left off.`;
 }
 
+/**
+ * Appends a handoff text block to Anthropic's top-level `system` parameter.
+ *
+ * Anthropic's Messages API rejects a non-empty `role: "system"` entry at
+ * `messages[0]` ("use the top-level 'system' parameter for the initial system
+ * prompt"), so a handoff injected into a Claude-native body must never become a
+ * leading system message. An existing string system prompt is preserved as the
+ * first block so prompt order is unchanged; `messages` is left untouched.
+ */
+function injectClaudeSystemHandoff(
+  body: Record<string, unknown>,
+  handoffContent: string
+): Record<string, unknown> {
+  const handoffBlock = { type: "text", text: handoffContent };
+  const existingSystem = body.system;
+  let system: unknown[];
+
+  if (Array.isArray(existingSystem)) {
+    system = [...existingSystem, handoffBlock];
+  } else if (typeof existingSystem === "string" && existingSystem.length > 0) {
+    system = [{ type: "text", text: existingSystem }, handoffBlock];
+  } else {
+    system = [handoffBlock];
+  }
+
+  return { ...body, system };
+}
+
 export function injectHandoffIntoBody(
   body: Record<string, unknown>,
   payload: HandoffPayload,
-  _relayMode?: "schema-locked" | "standard"
+  _relayMode?: "schema-locked" | "standard",
+  sourceFormat?: string | null
 ): Record<string, unknown> {
   const handoffContent = buildHandoffSystemMessage(payload);
   const isResponsesRequest =
@@ -560,6 +589,10 @@ export function injectHandoffIntoBody(
     }
 
     return nextBody;
+  }
+
+  if (sourceFormat === "claude") {
+    return injectClaudeSystemHandoff(body, handoffContent);
   }
 
   const handoffMessage = {
@@ -782,13 +815,20 @@ async function generateUniversalHandoffAsync(options: {
   try {
     content = getResponseText((await response.clone().json()) as Record<string, unknown>);
   } catch {
-    content = await response.clone().text().catch(() => "");
+    content = await response
+      .clone()
+      .text()
+      .catch(() => "");
   }
 
   const parsed = parseHandoffJSON(content);
   if (!parsed) {
     const preview = JSON.stringify(content.slice(0, 200));
-    logUniversalHandoffOutcome("unparseable", options.comboName, `model=${summaryModel} contentPreview=${preview}`);
+    logUniversalHandoffOutcome(
+      "unparseable",
+      options.comboName,
+      `model=${summaryModel} contentPreview=${preview}`
+    );
     return "unparseable";
   }
 
@@ -875,7 +915,8 @@ export function injectUniversalHandoffBody(
   currModel: string,
   reason: string,
   existingPayload?: HandoffPayload | null,
-  _relayMode?: "schema-locked" | "standard"
+  _relayMode?: "schema-locked" | "standard",
+  sourceFormat?: string | null
 ): Record<string, unknown> {
   const handoffContent = buildUniversalHandoffSystemMessage(
     prevModel,
@@ -904,6 +945,10 @@ export function injectUniversalHandoffBody(
       return rest;
     }
     return nextBody;
+  }
+
+  if (sourceFormat === "claude") {
+    return injectClaudeSystemHandoff(body, handoffContent);
   }
 
   const handoffMessage = {

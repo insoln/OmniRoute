@@ -30,7 +30,11 @@ import {
   addParamToBlocklist,
   isAutoLearnGloballyEnabled,
 } from "@/lib/db/paramFilters";
-import { applyFingerprint, isCliCompatEnabled, stripInternalBodyFields } from "../config/cliFingerprints.ts";
+import {
+  applyFingerprint,
+  isCliCompatEnabled,
+  stripInternalBodyFields,
+} from "../config/cliFingerprints.ts";
 import { supportsClaudeMaxEffort, supportsXHighEffort } from "../config/providerModels.ts";
 import { getThinkingBudgetConfig, ThinkingMode } from "../services/thinkingBudget.ts";
 import {
@@ -59,7 +63,11 @@ import {
 } from "../services/tokenRefresh.ts";
 import type { ProviderRequestDefaults } from "../services/providerRequestDefaults.ts";
 import { signRequestBody } from "../services/claudeCodeCCH.ts";
-import { normalizeCacheControlTtl } from "../services/claudeCodeConstraints.ts";
+import {
+  hoistLeadingSystemMessages,
+  normalizeCacheControlTtl,
+  relocateDirectiveOnlyMessages,
+} from "../services/claudeCodeConstraints.ts";
 import {
   appendAnthropicBetaHeader,
   CLAUDE_CODE_COMPATIBLE_REDACT_THINKING_BETA,
@@ -1366,7 +1374,14 @@ export class BaseExecutor {
         // routing mode (grouped/raw/combo) and the native passthrough share,
         // before fingerprinting and CCH signing serialize the body.
         if (this.provider === "claude" || usesClaudeCodeProtocol) {
-          enforceThinkingTemperature(transformedBody as Record<string, unknown>);
+          const tb = transformedBody as Record<string, unknown>;
+          // Final wire-body guard: chatCore normally hoists initial prompt roles,
+          // but direct executor calls and later payload transforms can bypass or
+          // undo that repair. Preserve valid directive-only messages while lifting
+          // real prompt content into Anthropic's top-level system parameter.
+          hoistLeadingSystemMessages(tb);
+          relocateDirectiveOnlyMessages(tb);
+          enforceThinkingTemperature(tb);
         }
 
         // Delegated Context Editing (opt-in): attach the clear_tool_uses strategy so
