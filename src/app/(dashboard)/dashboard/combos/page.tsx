@@ -1,6 +1,15 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef, memo, Suspense } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+  memo,
+  Suspense,
+} from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -388,6 +397,42 @@ const STRATEGY_RECOMMENDATIONS_FALLBACK = {
 
 const COMBO_USAGE_GUIDE_STORAGE_KEY = "omniroute:combos:hide-usage-guide";
 
+// The dismissal lives in localStorage, which SSR cannot read: a lazy useState
+// initializer would render "not dismissed" on the server and the real value on
+// the client, and correcting that in an effect is a synchronous setState inside
+// an effect (react-hooks/set-state-in-effect) that costs an extra commit of this
+// whole tree. useSyncExternalStore is the sanctioned shape for exactly this —
+// getServerSnapshot supplies the SSR-safe default, getSnapshot reads the store
+// after hydration, and the two handlers below notify subscribers instead of
+// setting state. The `storage` listener keeps other tabs in sync for free.
+const usageGuideListeners = new Set<() => void>();
+
+function subscribeUsageGuide(onStoreChange: () => void): () => void {
+  usageGuideListeners.add(onStoreChange);
+  globalThis.addEventListener?.("storage", onStoreChange);
+  return () => {
+    usageGuideListeners.delete(onStoreChange);
+    globalThis.removeEventListener?.("storage", onStoreChange);
+  };
+}
+
+function emitUsageGuideChange(): void {
+  for (const listener of usageGuideListeners) listener();
+}
+
+function getUsageGuideSnapshot(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(COMBO_USAGE_GUIDE_STORAGE_KEY) !== "1";
+  } catch {
+    // Storage access errors (privacy mode / restricted environments) show the guide.
+    return true;
+  }
+}
+
+function getUsageGuideServerSnapshot(): boolean {
+  return true;
+}
+
 // Pure predicate hoisted out of the page component to keep its cyclomatic budget flat
 // (check:complexity new-code mode).
 function isStaleIntelligentSelection(
@@ -766,16 +811,18 @@ function CombosPageContent() {
   // real stored value -- exactly the kind of source React's hydration
   // mismatch check is built to catch, and in dev mode a mismatch forces a
   // full client-only re-render of this tree, discarding whatever the fetch
-  // effects below had already populated. Start with the SSR-safe default on
-  // both passes and correct it client-only, after hydration, in an effect.
-  const [showUsageGuide, setShowUsageGuide] = useState(true);
-  useEffect(() => {
-    try {
-      setShowUsageGuide(globalThis.localStorage?.getItem(COMBO_USAGE_GUIDE_STORAGE_KEY) !== "1");
-    } catch {
-      // Ignore storage access errors (privacy mode / restricted environments)
-    }
-  }, []);
+  // effects below had already populated. useSyncExternalStore renders the
+  // SSR-safe default on both passes and switches to the stored value at
+  // hydration, without a second commit — see the store helpers above.
+  const usageGuideNotDismissed = useSyncExternalStore(
+    subscribeUsageGuide,
+    getUsageGuideSnapshot,
+    getUsageGuideServerSnapshot
+  );
+  // "Hide" (as opposed to "hide forever") is intentionally per-mount: it is not
+  // persisted, and remounting the page brings the guide back — same as before.
+  const [usageGuideHiddenForNow, setUsageGuideHiddenForNow] = useState(false);
+  const showUsageGuide = usageGuideNotDismissed && !usageGuideHiddenForNow;
   const [recentlyCreatedCombo, setRecentlyCreatedCombo] = useState("");
   const [creatingKimiPreset, setCreatingKimiPreset] = useState(false);
   const [comboDragIndex, setComboDragIndex] = useState(null);
@@ -1006,17 +1053,18 @@ function CombosPageContent() {
   };
 
   const handleHideUsageGuideForever = () => {
-    setShowUsageGuide(false);
     try {
       globalThis.localStorage?.setItem(COMBO_USAGE_GUIDE_STORAGE_KEY, "1");
     } catch {}
+    emitUsageGuideChange();
   };
 
   const handleShowUsageGuide = () => {
-    setShowUsageGuide(true);
     try {
       globalThis.localStorage?.removeItem(COMBO_USAGE_GUIDE_STORAGE_KEY);
     } catch {}
+    setUsageGuideHiddenForNow(false);
+    emitUsageGuideChange();
   };
 
   const handleFilterChange = (nextFilter) => {
@@ -1149,7 +1197,7 @@ function CombosPageContent() {
 
       {showUsageGuide && (
         <ComboUsageGuide
-          onHide={() => setShowUsageGuide(false)}
+          onHide={() => setUsageGuideHiddenForNow(true)}
           onHideForever={handleHideUsageGuideForever}
           onCreateCombo={() => setShowCreateModal(true)}
         />

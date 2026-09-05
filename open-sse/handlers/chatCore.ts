@@ -1097,6 +1097,10 @@ export async function handleChatCore({
       // #12150 P1b surface 1: undefined for every non-video request (byte-identical
       // to before this param existed) — see applyVideoBridgeLogRedaction.
       videoBridgeLogRedaction: (videoBridgeLog as VideoBridgeLogParam | undefined)?.redaction,
+      // #12150 P2 surface 2: mark the persisted call_logs row so
+      // resolvePreviousResponseState refuses to rehydrate a snapshot whose video
+      // transcript was redacted. false for every non-video request.
+      videoContentRemoved: videoBridgeObserved,
     });
 
   // Primary path: merge client model id + alias target so config on either key applies; resolved
