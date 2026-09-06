@@ -287,6 +287,7 @@ import { stageTrace } from "./chatCore/stageTrace.ts";
 import { attachCompressionUsageReceiptAfterAnalytics as attachCompressionUsageReceiptAfterAnalyticsFor } from "./chatCore/compressionUsageReceipt.ts";
 import { prepareUpstreamBody } from "./chatCore/upstreamBody.ts";
 import { getQuotaScopeLabelForProvider } from "../services/antigravityQuotaFamily.ts";
+import { recordRequestRejected } from "../services/requestRejectedStreak.ts";
 import { getKimiTemporaryRateLimitResetAt } from "./chatCore/kimiQuotaRecovery.ts";
 import {
   getCallLogPipelineCaptureStreamChunks,
@@ -4500,6 +4501,49 @@ export async function handleChatCore({
           console.warn(
             `[provider] Node ${errorConnectionId} geo-blocked (${statusCode}) — excluded for ${Math.ceil(geoCooldownMs / 1000)}s, trying other accounts`
           );
+        } else if (errorType === PROVIDER_ERROR_TYPES.REQUEST_REJECTED) {
+          // The upstream refused THIS request, not the credential (#12859 —
+          // Anthropic OAuth 403 "Request not allowed"; the same token serves the
+          // next request). One refusal must not ban the connection — but a run
+          // of them is enforcement and re-sending every request into it would
+          // be wrong. So: exclude the connection for a short, growing cooldown
+          // and escalate to `banned` only for a streak inside one window.
+          const verdict = recordRequestRejected(errorConnectionId);
+          const probeIsolatedRr = await shouldIsolateProbeFailures();
+          if (verdict.escalate && !probeIsolatedRr) {
+            await writeTerminalStatus(
+              errorConnectionId,
+              {
+                testStatus: "banned",
+                isActive: false,
+                lastError: `${persistentMessage} (${verdict.streak} refusals within ${Math.round(verdict.windowMs / 60000)}min — treated as upstream enforcement)`,
+                lastErrorType: PROVIDER_ERROR_TYPES.FORBIDDEN,
+                errorCode: String(statusCode),
+              },
+              "production"
+            );
+            console.warn(
+              `[provider] Node ${errorConnectionId} refused ${verdict.streak}x within ${Math.round(verdict.windowMs / 60000)}min (${statusCode}) — disabling, reconnect required`
+            );
+          } else {
+            await updateProviderConnection(errorConnectionId, {
+              lastErrorType: errorType,
+              lastError: persistentMessage,
+              errorCode: statusCode,
+            });
+            // T-PROBE: a probe must not push a connection into a cooldown (#9817).
+            if (!probeIsolatedRr) {
+              try {
+                const { setConnectionRateLimitUntil } = await import("@/lib/db/providers");
+                setConnectionRateLimitUntil(errorConnectionId, Date.now() + verdict.cooldownMs);
+              } catch {
+                // DB write failure must never break the fallback loop
+              }
+            }
+            console.warn(
+              `[provider] Node ${errorConnectionId} request refused by upstream (${statusCode}) — excluded for ${Math.ceil(verdict.cooldownMs / 1000)}s (refusal ${verdict.streak}/${verdict.threshold} in window), trying other accounts`
+            );
+          }
         } else if (errorType === PROVIDER_ERROR_TYPES.GCP_PROJECT_REQUIRED) {
           // Antigravity BYOP: the account must Bring Its Own GCP Project.
           // Account-specific and fixable by entering a Project ID — never a

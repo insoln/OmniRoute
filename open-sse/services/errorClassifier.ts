@@ -89,10 +89,11 @@ export const PROVIDER_ERROR_TYPES = {
   // fixable by entering a Project ID — never a model lockout and never a ban.
   GCP_PROJECT_REQUIRED: "gcp_project_required",
   // The upstream refused THIS request (policy / request shape), not the
-  // credential: the same connection serves the next request. Never a terminal
-  // account state, never a model lockout. First case: Anthropic's OAuth 403
-  // "Request not allowed", which lands on a handful of requests between
-  // hundreds of 200s on the same token (see isAnthropicRequestNotAllowed).
+  // credential: the same connection serves the next request. Not terminal on
+  // its own — chatCore excludes the connection for a growing cooldown and only
+  // a streak of refusals escalates to `banned` (services/requestRejectedStreak).
+  // First case: Anthropic's OAuth 403 "Request not allowed" (#12859), which
+  // lands on a handful of requests between thousands of 200s on the same token.
   REQUEST_REJECTED: "request_rejected",
 };
 
