@@ -88,6 +88,12 @@ export const PROVIDER_ERROR_TYPES = {
   // Google account must Bring Its Own GCP Project. Account-specific and
   // fixable by entering a Project ID — never a model lockout and never a ban.
   GCP_PROJECT_REQUIRED: "gcp_project_required",
+  // The upstream refused THIS request (policy / request shape), not the
+  // credential: the same connection serves the next request. Never a terminal
+  // account state, never a model lockout. First case: Anthropic's OAuth 403
+  // "Request not allowed", which lands on a handful of requests between
+  // hundreds of 200s on the same token (see isAnthropicRequestNotAllowed).
+  REQUEST_REJECTED: "request_rejected",
 };
 
 export const CONTEXT_OVERFLOW_SIGNALS = [
@@ -203,6 +209,25 @@ export function isCloudflareFingerprintRejection(errorText: string): boolean {
   );
 }
 
+/**
+ * Anthropic's OAuth (Claude subscription) surface answers a small fraction of
+ * otherwise-valid requests with `403 {"type":"permission_error","message":
+ * "Request not allowed"}`. Observed on one install: 200 on the same token 40 s
+ * earlier, 200 on the next request after the connection was re-enabled — it is
+ * a per-request refusal, not an account ban or a revoked token (a revoked token
+ * is a 401 `authentication_error`). Classifying it FORBIDDEN flipped the only
+ * Claude connection to the terminal `banned` state on a single response, and
+ * every later request was short-circuited with "All 1 connection(s) banned by
+ * upstream" until an operator reconnected in the dashboard.
+ */
+export function isAnthropicOAuthProvider(provider?: string | null): boolean {
+  return String(provider || "").toLowerCase() === "claude";
+}
+
+export function isAnthropicRequestNotAllowed(errorText: string): boolean {
+  return /\brequest not allowed\b/i.test(String(errorText || ""));
+}
+
 function responseBodyToString(responseBody: unknown): string {
   if (typeof responseBody === "string") return responseBody;
   if (responseBody !== null && typeof responseBody === "object") {
@@ -256,7 +281,10 @@ export function classifyProviderError(
   const oauthInvalid = isOAuthInvalidToken(bodyStr);
   const preserveQuota429 = shouldPreserveQuotaSignalsFor429(provider);
 
-  if ((creditsExhausted || subscriptionQuotaExhausted) && [400, 401, 402, 403].includes(statusCode)) {
+  if (
+    (creditsExhausted || subscriptionQuotaExhausted) &&
+    [400, 401, 402, 403].includes(statusCode)
+  ) {
     return PROVIDER_ERROR_TYPES.QUOTA_EXHAUSTED;
   }
 
@@ -336,6 +364,16 @@ export function classifyProviderError(
   }
   if (statusCode === 403 && accountDeactivated) {
     return PROVIDER_ERROR_TYPES.ACCOUNT_DEACTIVATED;
+  }
+  if (
+    statusCode === 403 &&
+    isAnthropicOAuthProvider(provider) &&
+    isAnthropicRequestNotAllowed(bodyStr)
+  ) {
+    // Per-request refusal on an otherwise healthy Claude OAuth token — see
+    // isAnthropicRequestNotAllowed. Must be checked BEFORE the generic 403 →
+    // FORBIDDEN fall-through, which bans the connection permanently.
+    return PROVIDER_ERROR_TYPES.REQUEST_REJECTED;
   }
   if (statusCode === 403) {
     // Cloud Code / Antigravity (Gemini Code Assist) 403s are almost always a
