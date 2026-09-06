@@ -287,6 +287,7 @@ import { stageTrace } from "./chatCore/stageTrace.ts";
 import { attachCompressionUsageReceiptAfterAnalytics as attachCompressionUsageReceiptAfterAnalyticsFor } from "./chatCore/compressionUsageReceipt.ts";
 import { prepareUpstreamBody } from "./chatCore/upstreamBody.ts";
 import { getQuotaScopeLabelForProvider } from "../services/antigravityQuotaFamily.ts";
+import { excludeConnectionForCooldown } from "./chatCore/connectionCooldown.ts";
 import { handleRequestRejectedFailure } from "./chatCore/requestRejectedFailure.ts";
 import { getKimiTemporaryRateLimitResetAt } from "./chatCore/kimiQuotaRecovery.ts";
 import {
@@ -4476,60 +4477,41 @@ export async function handleChatCore({
             `[provider] Node ${errorConnectionId} project routing error (${statusCode}) — not banning`
           );
         } else if (errorType === PROVIDER_ERROR_TYPES.GEO_BLOCKED) {
-          // Google regional-availability refusal (e.g. "User location is not
-          // supported for the API use."). Account-independent and non-terminal:
-          // exclude the connection for the cooldown window so routing moves to
-          // other accounts instead of re-selecting this one on every request,
-          // and never mark it banned/expired. It becomes usable again once
-          // egress is routed through a supported-region proxy.
-          const geoCooldownMs = COOLDOWN_MS.geoBlocked ?? 24 * 60 * 60 * 1000;
-          await updateProviderConnection(errorConnectionId, {
-            lastErrorType: errorType,
-            lastError: persistentMessage,
-            errorCode: statusCode,
+          // Google regional-availability refusal: account-independent and
+          // non-terminal — park the connection so routing moves to other
+          // accounts; usable again once egress goes through a supported-region
+          // proxy. Probes never push it into the day-long cooldown (#9817).
+          await excludeConnectionForCooldown({
+            connectionId: errorConnectionId,
+            errorType,
+            message: persistentMessage,
+            statusCode,
+            cooldownMs: COOLDOWN_MS.geoBlocked ?? 24 * 60 * 60 * 1000,
+            skipCooldownForProbe: true,
+            label: "geo-blocked",
+            suffix: "trying other accounts",
           });
-          // T-PROBE: the 24h exclusion is a routing mutation — a probe must
-          // not push a connection into a day-long cooldown (#9817).
-          if (!(await shouldIsolateProbeFailures())) {
-            try {
-              const { setConnectionRateLimitUntil } = await import("@/lib/db/providers");
-              setConnectionRateLimitUntil(errorConnectionId, Date.now() + geoCooldownMs);
-            } catch {
-              // DB write failure must never break the fallback loop
-            }
-          }
-          console.warn(
-            `[provider] Node ${errorConnectionId} geo-blocked (${statusCode}) — excluded for ${Math.ceil(geoCooldownMs / 1000)}s, trying other accounts`
-          );
         } else if (errorType === PROVIDER_ERROR_TYPES.REQUEST_REJECTED) {
           // Per-request refusal (#12859): growing cooldown, streak → banned.
-          // Leaf: chatCore/requestRejectedFailure.ts.
           await handleRequestRejectedFailure({
             connectionId: errorConnectionId,
             statusCode,
             message: persistentMessage,
           });
         } else if (errorType === PROVIDER_ERROR_TYPES.GCP_PROJECT_REQUIRED) {
-          // Antigravity BYOP: the account must Bring Its Own GCP Project.
-          // Account-specific and fixable by entering a Project ID — never a
-          // model lockout, never a ban. Exclude the connection for the
-          // cooldown window so selection prefers sibling accounts; the 422
-          // body carries the actionable message when no sibling is available.
-          const byopCooldownMs = COOLDOWN_MS.gcpProjectRequired ?? 24 * 60 * 60 * 1000;
-          await updateProviderConnection(errorConnectionId, {
-            lastErrorType: errorType,
-            lastError: persistentMessage,
-            errorCode: statusCode,
+          // Antigravity BYOP: fixable by entering a Project ID — never a model
+          // lockout, never a ban. Park the connection so selection prefers
+          // sibling accounts; the 422 body carries the actionable message.
+          await excludeConnectionForCooldown({
+            connectionId: errorConnectionId,
+            errorType,
+            message: persistentMessage,
+            statusCode,
+            cooldownMs: COOLDOWN_MS.gcpProjectRequired ?? 24 * 60 * 60 * 1000,
+            skipCooldownForProbe: false,
+            label: "GCP project required",
+            suffix: "routing to other accounts (enter a Project ID to restore)",
           });
-          try {
-            const { setConnectionRateLimitUntil } = await import("@/lib/db/providers");
-            setConnectionRateLimitUntil(errorConnectionId, Date.now() + byopCooldownMs);
-          } catch {
-            // best-effort — never break the error path
-          }
-          console.warn(
-            `[provider] Node ${errorConnectionId} GCP project required (${statusCode}) — excluded for ${Math.ceil(byopCooldownMs / 1000)}s, routing to other accounts (enter a Project ID to restore)`
-          );
         } else if (errorType === PROVIDER_ERROR_TYPES.MODEL_NOT_FOUND) {
           // 404 — model/endpoint does not exist upstream. Lock the model so the
           // retry/backoff loop stops hammering the dead endpoint (which would
