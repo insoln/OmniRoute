@@ -736,6 +736,31 @@ async function applyPromptCacheStage(
   return nextTargets;
 }
 
+function buildWeightedExhaustionResponse(
+  deps: ResolveComboTargetPipelineDeps,
+  weightedResolution: WeightedResolution,
+  exclusions: PreDispatchExclusion[]
+): Response | null {
+  if (deps.strategy !== "weighted" || (weightedResolution?.orderedTargets.length ?? 0) > 0) {
+    return null;
+  }
+  // Every step was excluded before dispatch. When a resilience timer (model
+  // lockout, open breaker, provider cooldown) did it, the pool is configured and
+  // connected and merely cooling down: answer 503 + Retry-After with the
+  // excluded targets, not the host's 404 "no executable targets / switch combo".
+  const coolingDown = buildAllTargetsCoolingDownResponse(exclusions);
+  if (!coolingDown) return null;
+  deps.log.warn(
+    "COMBO",
+    `Weighted selection: every target excluded before dispatch — ${formatPreDispatchExclusions(exclusions)}`
+  );
+  recordComboFailure(
+    deps.combo.context_cache_protection ? (deps.relayOptions?.sessionId ?? null) : null,
+    deps.combo.name
+  );
+  return coolingDown;
+}
+
 export async function resolveComboTargetPipeline(
   deps: ResolveComboTargetPipelineDeps
 ): Promise<ResolveComboTargetPipelineResult> {
@@ -752,24 +777,8 @@ export async function resolveComboTargetPipeline(
     stickyWeightedLimit
   );
   const getWeightedStepKeyForTarget = buildWeightedStepKeyMapper(weightedResolution);
-  if (strategy === "weighted" && (weightedResolution?.orderedTargets.length ?? 0) === 0) {
-    // Every step was excluded before dispatch. When a resilience timer (model
-    // lockout, open breaker, provider cooldown) did it, the pool is configured and
-    // connected and merely cooling down: answer 503 + Retry-After with the
-    // excluded targets, not the host's 404 "no executable targets / switch combo".
-    const coolingDown = buildAllTargetsCoolingDownResponse(exclusions);
-    if (coolingDown) {
-      log.warn(
-        "COMBO",
-        `Weighted selection: every target excluded before dispatch — ${formatPreDispatchExclusions(exclusions)}`
-      );
-      recordComboFailure(
-        combo.context_cache_protection ? (deps.relayOptions?.sessionId ?? null) : null,
-        combo.name
-      );
-      return { earlyResponse: coolingDown };
-    }
-  }
+  const weightedExhaustion = buildWeightedExhaustionResponse(deps, weightedResolution, exclusions);
+  if (weightedExhaustion) return { earlyResponse: weightedExhaustion };
   let orderedTargets =
     strategy === "weighted"
       ? weightedResolution?.orderedTargets || []
