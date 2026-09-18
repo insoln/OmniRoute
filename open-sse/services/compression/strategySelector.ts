@@ -66,6 +66,16 @@ import {
 import { makeMemoKey, memoLookup, memoStore, isDeterministicMode } from "./resultMemo.ts";
 export { resolveCacheAwareConfig } from "./cacheAwareConfig.ts";
 
+// The rate-limited fail-open notifier lives in its own module so the worker pool
+// and the llmlingua worker can import it without an import cycle (strategySelector
+// statically pulls the engines; the pool must stay importable from underneath it).
+import { notifyCompressionFailOpen } from "./failOpenNotifier.ts";
+import { sanitizeErrorMessage } from "../../utils/errorSanitization.ts";
+export {
+  notifyCompressionFailOpen,
+  __resetCompressionFailOpenNotifierForTests,
+} from "./failOpenNotifier.ts";
+
 // Re-export so existing importers (resolver test + chatCore dynamic import) keep resolving.
 export {
   planFromHeader,
@@ -541,7 +551,14 @@ async function runCompressionAsync(
     try {
       const { runCompressionInWorker } = await import("./compressionWorkerPool.ts");
       return await runCompressionInWorker(body, mode, workerOptions, options?.onEngineStep);
-    } catch {
+    } catch (error) {
+      notifyCompressionFailOpen(
+        sanitizeErrorMessage(error instanceof Error ? error.message : error)
+      );
+      // Worker failed (timeout, postMessage rejection, etc.) — a timeout means the
+      // compression was too heavy for the worker's budget, so falling through to run
+      // the SAME heavy compression synchronously on the main event loop would defeat
+      // the point of offloading it. Ship the body uncompressed instead.
       return { body, compressed: false, stats: null };
     }
   }
