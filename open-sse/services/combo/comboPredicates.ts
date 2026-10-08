@@ -255,8 +255,10 @@ export function shouldRecordProviderBreakerFailure(args: {
   /** #8376: transport-level "proxy unreachable" signal — overrides the `sameProviderNext`
    * exemption only; every other AND-term still gates the trip. */
   isProxyUnreachable?: boolean;
+  providerCircuitOpen?: boolean;
 }): boolean {
   return (
+    !args.providerCircuitOpen &&
     (!args.isStreamReadinessFailure || args.isStreamEarlyEof === true) &&
     // Overloaded 502 (STREAM_EARLY_EOF wrapping "Overloaded") must not trip
     // the whole-provider breaker. The status=529 check is defense in depth:

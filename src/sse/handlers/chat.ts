@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { resolveChatRequestBody } from "./requestBody";
+import { getComboCredentialAvailability } from "./comboCredentialAvailability.ts";
 import * as chatAdmission from "./chatAdmission.ts";
 import { buildClientRawRequest, resolveDispatchClientRawRequest } from "./chat/clientRawRequest.ts";
 export { buildClientRawRequest, resolveDispatchClientRawRequest };
@@ -124,6 +125,8 @@ import {
 import { markAntigravityMissingCloudCodeProject } from "@omniroute/open-sse/services/antigravityProjectPersistence.ts";
 import { connectionHasExtraKeys } from "@omniroute/open-sse/services/apiKeyRotator.ts";
 import { wrapResponseWithOAuthSessionRelease } from "@omniroute/open-sse/services/oauthSessionOccupancy.ts";
+import { inheritProviderProbeResponse } from "@/shared/utils/providerProbeResult";
+import { resolveProviderId } from "@/shared/constants/providers";
 import {
   extractReasoningIntent,
   type ExtractedReasoningIntent,
@@ -1122,12 +1125,8 @@ async function handleChatImplementation(
           ...(managedLease ? { lease: credentialLease(managedLease) } : {}),
         }
       );
-      if (
-        !creds ||
-        ("allRateLimited" in creds && creds.allRateLimited) ||
-        ("waitingForCapacity" in creds && creds.waitingForCapacity)
-      )
-        return false;
+      const availability = getComboCredentialAvailability(creds);
+      if (availability !== true) return availability;
 
       // OAuth selection must happen atomically with occupancy reservation in the
       // actual dispatch. Availability preflight may finish well before a combo
@@ -1629,11 +1628,10 @@ async function handleSingleModelChat(
     provider,
     (providerProfile as { useUpstream429BreakerHints?: boolean }).useUpstream429BreakerHints
   );
-  const breaker = getCircuitBreaker(provider, {
+  const breaker = getCircuitBreaker(resolveProviderId(provider), {
     failureThreshold: providerProfile.failureThreshold,
     resetTimeout: providerProfile.resetTimeoutMs,
-    // #4602: a local WS-bridge "Controller is already closed" throw is not an
-    // upstream outage — keep it from tripping the whole-provider breaker.
+    // A local stream lifecycle error never reached the provider.
     isFailure: (e) => !isLocalStreamLifecycleError(e),
     onStateChange: (name: string, from: string, to: string) =>
       log.info("CIRCUIT", `${name}: ${from} → ${to}`),
@@ -1808,7 +1806,7 @@ async function handleSingleModelChat(
           }
         }
 
-        const breakerFailureStatus = Number(lastStatus ?? credentials?.lastErrorCode);
+        const breakerFailureStatus = Number(lastStatus);
         // lastError is a string here — check for the proxy_unreachable tag embedded by
         // tagProxyUnreachable (proxyFetch.ts) and OmniRoute's own queue timeouts. Both mean
         // we never reached the provider, so they must not trip the provider breaker.
@@ -2063,17 +2061,18 @@ async function handleSingleModelChat(
         agyLease.release(leaseId);
         return execution.localResourcePressureResult.response;
       }
-      const { result, tlsFingerprintUsed } = execution;
+      const { result, tlsFingerprintUsed, wasProviderProbe } = execution;
       if (!result.success) releaseOAuthSession();
-      // Hand the lease to the SSE body's terminal lifecycle; anything else frees it now.
       if (result.success && agyLease.isStreamingAntigravityResponse(result.response))
-        result.response = agyLease.holdAntigravityLeaseThroughResponse(
+        result.response = inheritProviderProbeResponse(
           result.response,
-          leaseId,
-          clientRawRequest?.signal
+          agyLease.holdAntigravityLeaseThroughResponse(
+            result.response,
+            leaseId,
+            clientRawRequest?.signal
+          )
         );
       else agyLease.release(leaseId);
-
       const proxyLatency = Date.now() - proxyStartTime;
       const providerAlias = PROVIDER_ID_TO_ALIAS[provider] || provider;
       const effectiveTargetFormat =
@@ -2081,12 +2080,7 @@ async function handleSingleModelChat(
         getTargetFormat(provider, credentials.providerSpecificData) ||
         targetFormat;
 
-      // 5. Log proxy + translation events (fire-and-forget; never blocks the response)
-      // #5217: reflect the proxy the executor actually applied (per-account rotation).
-      // Rotation attribution (single flag read per request — the DB override
-      // lookup is synchronous SQLite): forward the masked serving-account id
-      // and the request correlation id, or null when the flag is off so the
-      // new columns stay NULL on legacy-behavior requests.
+      // Log the applied proxy and optional rotation attribution without blocking the response.
       const rotationAttributionOn = isRotationAttributionEnabled();
       void safeLogEvents({
         result,
@@ -2106,11 +2100,12 @@ async function handleSingleModelChat(
 
       if (result.success) {
         clearModelLock(provider, credentials.connectionId, model);
-        // #14359 — a real upstream success is authoritative: arm the healthy override.
         markQuotaHealthy(credentials.connectionId);
-        // #12254: exactly-once breaker accounting — combo successes are recorded by
-        // combo.ts (recordProviderSuccess); live combo tests never touch the breaker.
-        if (classifyProviderBreakerResult(result, isCombo, forceLiveComboTest) === "success") {
+        // Acquired probes were settled inside execute(); other successes settle here or in combo.
+        if (
+          !wasProviderProbe &&
+          classifyProviderBreakerResult(result, isCombo, forceLiveComboTest) === "success"
+        ) {
           breaker._onSuccess();
         }
         if (injectedHandoff && runtimeOptions.sessionId && comboName) {
@@ -2123,15 +2118,16 @@ async function handleSingleModelChat(
           credentials?.connectionId
         );
         if (requestBody.stream === true) {
-          return wrapResponseWithOAuthSessionRelease(successResponse, releaseOAuthSession);
+          return inheritProviderProbeResponse(
+            successResponse,
+            wrapResponseWithOAuthSessionRelease(successResponse, releaseOAuthSession)
+          );
         }
         releaseOAuthSession();
         return successResponse;
       }
 
-      // A final hard-lease fence rejection is authoritative. It must never mutate
-      // connection health/cooldown state or fall through to ordinary account/model
-      // fallback, which could turn a stale lifecycle into unmanaged dispatch.
+      // A hard-lease rejection must not mutate account state or retry.
       if (
         runtimeOptions.managedLease &&
         (result.errorType === "lease_error" || String(result.errorCode || "").startsWith("LEASE_"))
@@ -2581,9 +2577,9 @@ async function handleSingleModelChat(
         continue;
       }
 
-      // T-PROBE: a probe failure must not degrade the provider-wide circuit
-      // breaker for real traffic (#9817).
+      // Isolate probe-origin failures from real-traffic breaker accounting (#9817).
       if (
+        !wasProviderProbe &&
         !(await shouldIsolateProbeFailures()) &&
         classifyProviderBreakerResult(result, isCombo, forceLiveComboTest) === "failure"
       ) {
