@@ -1150,6 +1150,7 @@ export function sanitizeStreamingChunk(parsed: unknown): unknown {
         if (deltaRecord) {
           const delta: JsonRecord = {};
           if (deltaRecord.role !== undefined) delta.role = deltaRecord.role;
+          if (typeof deltaRecord.refusal === "string") delta.refusal = deltaRecord.refusal;
           if (deltaRecord.content !== undefined) {
             delta.content =
               typeof deltaRecord.content === "string"
