@@ -18,7 +18,7 @@ import {
 } from "@/sse/services/auth";
 import { getCachedProviderNodes } from "@/lib/db/readCache";
 import { getComboByName, getCombos } from "@/lib/db/combos";
-import { getDatabaseSettings } from "@/lib/db/databaseSettings";
+import { getUserDatabaseSettings } from "@/lib/db/databaseSettings";
 import { resolveProxyForConnection } from "@/lib/db/settings";
 import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
 import { handleComboChat } from "@omniroute/open-sse/services/combo.ts";
@@ -95,7 +95,7 @@ export async function createEmbeddingResponse(
 
         let settings = {};
         try {
-          settings = getDatabaseSettings();
+          settings = getUserDatabaseSettings();
         } catch {}
 
         // Inject the combo's configured dimensions into the request body so that
