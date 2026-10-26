@@ -8,6 +8,7 @@ import { runJsonMigration, type LegacyJsonData } from "@/lib/db/jsonMigration";
 import { getSettings } from "@/lib/db/settings";
 import { setSystemPromptConfig } from "@omniroute/open-sse/services/systemPrompt.ts";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
+import { IMPORT_STRIPPED_SETTINGS_KEYS } from "@/shared/constants/securityImpactingSettings";
 
 /**
  * POST /api/settings/import-json
@@ -58,7 +59,8 @@ export async function POST(request: Request) {
 
     // 🔒 Zero-Trust: strip authentication config before migration
     if (data.settings) {
-      const { password: _pw, requireLogin: _rl, ...safeSettings } = data.settings;
+      const safeSettings = { ...data.settings };
+      for (const key of IMPORT_STRIPPED_SETTINGS_KEYS) delete safeSettings[key];
       data = { ...data, settings: safeSettings };
     }
 

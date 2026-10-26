@@ -6,6 +6,7 @@
  * at runtime (see: https://github.com/vercel/next.js/issues/12557).
  */
 import { z } from "zod";
+import { oidcAdmissionClaimSchema } from "@/shared/utils/oidcAdmissionClaim";
 import { COMBO_CONFIG_MODES } from "@/shared/constants/comboConfigMode";
 import { MAX_REQUEST_BODY_LIMIT_MB, MIN_REQUEST_BODY_LIMIT_MB } from "@/shared/constants/bodySize";
 import { HIDEABLE_SIDEBAR_GROUP_IDS } from "@/shared/constants/sidebarGroupVisibility";
@@ -116,6 +117,7 @@ export const updateSettingsSchema = z.object({
   oidcScopes: z.array(z.string().max(100)).optional(),
   oidcRedirectPath: z.string().max(500).optional(),
   oidcAllowedSubjects: z.array(z.string().max(200)).optional(),
+  oidcAdmissionClaim: oidcAdmissionClaimSchema.nullable().optional(),
   enableSocks5Proxy: z.boolean().optional(),
   instanceName: z.string().max(100).optional(),
   customLogoUrl: z.string().max(2000).optional(),
@@ -493,7 +495,9 @@ export const updateSettingsSchema = z.object({
   // holding a worker for hours.
   searchTimeoutMs: z.number().int().min(1_000).max(120_000).optional(),
   // Per-provider timeout overrides in ms, keyed by search provider id.
-  searchProviderTimeoutsMs: z.record(z.string().max(60), z.number().int().min(1).max(120_000)).optional(),
+  searchProviderTimeoutsMs: z
+    .record(z.string().max(60), z.number().int().min(1).max(120_000))
+    .optional(),
   backgroundDegradation: z.unknown().optional(),
   bruteForceProtection: z.boolean().optional(),
   // Auto-routing settings
