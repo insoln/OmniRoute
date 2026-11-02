@@ -37,6 +37,7 @@ export const GLM_SHARED_MODELS = Object.freeze([
     // are OmniRoute aliases resolved by GlmExecutor::parseGlmEffortTier.
     // https://docs.z.ai/guides/llm/glm-5.3
     id: "glm-5.3",
+    supportsVision: false,
     name: "GLM 5.3",
     contextLength: 1000000,
     maxOutputTokens: 131072,
@@ -46,6 +47,7 @@ export const GLM_SHARED_MODELS = Object.freeze([
   },
   {
     id: "glm-5.3-high",
+    supportsVision: false,
     name: "GLM 5.3 High",
     contextLength: 1000000,
     maxOutputTokens: 131072,
@@ -55,6 +57,7 @@ export const GLM_SHARED_MODELS = Object.freeze([
   },
   {
     id: "glm-5.3-low",
+    supportsVision: false,
     name: "GLM 5.3 Low",
     contextLength: 1000000,
     maxOutputTokens: 131072,
@@ -66,6 +69,7 @@ export const GLM_SHARED_MODELS = Object.freeze([
     // Explicit alias for the upstream default (max) — pins reasoning_effort so
     // the tier survives an upstream default change, and mirrors glm-5.2-max UX.
     id: "glm-5.3-max",
+    supportsVision: false,
     name: "GLM 5.3 Max",
     contextLength: 1000000,
     maxOutputTokens: 131072,

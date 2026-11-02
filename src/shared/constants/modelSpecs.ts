@@ -695,6 +695,7 @@ export const MODEL_SPECS: Record<string, ModelSpec> = {
     supportsVision: true,
   },
   "glm-5.3": {
+    supportsVision: false,
     maxOutputTokens: 131072,
     contextWindow: 1000000,
     thinkingBudgetCap: 38912,
@@ -702,6 +703,7 @@ export const MODEL_SPECS: Record<string, ModelSpec> = {
     supportsTools: true,
   },
   "glm-5.3-high": {
+    supportsVision: false,
     maxOutputTokens: 131072,
     contextWindow: 1000000,
     thinkingBudgetCap: 38912,
@@ -709,6 +711,7 @@ export const MODEL_SPECS: Record<string, ModelSpec> = {
     supportsTools: true,
   },
   "glm-5.3-low": {
+    supportsVision: false,
     maxOutputTokens: 131072,
     contextWindow: 1000000,
     thinkingBudgetCap: 38912,
@@ -716,6 +719,7 @@ export const MODEL_SPECS: Record<string, ModelSpec> = {
     supportsTools: true,
   },
   "glm-5.3-max": {
+    supportsVision: false,
     maxOutputTokens: 131072,
     contextWindow: 1000000,
     thinkingBudgetCap: 38912,
