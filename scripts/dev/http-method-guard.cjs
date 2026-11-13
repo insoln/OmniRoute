@@ -8,6 +8,9 @@ const HIGH_RISK_METHOD_RULES = [
   [/^\/api\/keys\/?$/, ["GET", "POST"]],
   // Must precede the generic /api/keys/{id} rule: "import" is a static segment, not a key id.
   [/^\/api\/keys\/import\/?$/, ["POST"]],
+  // Same for "groups": without this rule POST /api/keys/groups (create key
+  // group) hit the {id} rule below and was answered 405 before routing.
+  [/^\/api\/keys\/groups\/?$/, ["GET", "POST"]],
   [/^\/api\/keys\/[^/]+\/?$/, ["GET", "PATCH", "DELETE"]],
   [/^\/api\/keys\/[^/]+\/devices\/?$/, ["GET"]],
 ];

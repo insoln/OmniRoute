@@ -40,6 +40,14 @@ test("raw HTTP guard rejects high-risk unsupported methods before Next.js handle
       allow: "POST",
     },
     {
+      // POST /api/keys/groups (create key group) must not be swallowed by the
+      // /api/keys/{id} rule either.
+      label: "key groups PATCH",
+      method: "PATCH",
+      url: "/api/keys/groups",
+      allow: "GET, POST",
+    },
+    {
       label: "key detail QUERY",
       method: "QUERY",
       url: "/api/keys/0",
@@ -88,6 +96,10 @@ test("raw HTTP guard allows documented methods through", () => {
   assert.equal(maybeHandleDisallowedMethod({ method: "GET", url: "/api/keys" }, response), false);
   assert.equal(
     maybeHandleDisallowedMethod({ method: "POST", url: "/api/keys/import" }, response),
+    false
+  );
+  assert.equal(
+    maybeHandleDisallowedMethod({ method: "POST", url: "/api/keys/groups" }, response),
     false
   );
   assert.equal(
