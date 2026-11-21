@@ -65,6 +65,7 @@ import { defaultPerplexityAgentMaxOutputTokens } from "./default/perplexityAgent
 import { resolveZaiUrl } from "./default/zaiFormatOverride.ts";
 import { normalizePoolConfig, rejectStrictPool } from "./default/poolConfig.ts";
 import { isForceStreamProvider } from "./default/forceStreamBody.ts";
+import { applyStreamUsageOptions } from "./streamUsageOptions.ts";
 import { acquireNvidiaConcurrencySlot } from "./default/nvidiaConcurrencyGate.ts";
 import { normalizeOpenAIToolCallIds } from "./default/openaiToolCallIds.ts";
 import { resolveAlibabaProviderBaseUrl } from "@/shared/constants/alibabaProviderRegions";
@@ -945,19 +946,12 @@ export class DefaultExecutor extends BaseExecutor {
             delete withoutStreamOptions.stream_options;
             withDefaults = withoutStreamOptions;
           }
-        } else if (!credentials?.providerSpecificData?.disableStreamOptions) {
-          withDefaults = {
-            ...withDefaults,
-            stream: true,
-            stream_options: {
-              ...((defaultsRecord.stream_options as object) || {}),
-              include_usage: true,
-            },
-          };
-        } else if (Object.prototype.hasOwnProperty.call(withDefaults, "stream_options")) {
-          const withoutStreamOptions = { ...withDefaults } as Record<string, unknown>;
-          delete withoutStreamOptions.stream_options;
-          withDefaults = withoutStreamOptions;
+        } else {
+          const disableStreamOptions = credentials?.providerSpecificData?.disableStreamOptions;
+          withDefaults = applyStreamUsageOptions(defaultsRecord, true, disableStreamOptions);
+          if (!disableStreamOptions) {
+            withDefaults = { ...(withDefaults as Record<string, unknown>), stream: true };
+          }
         }
         // #18007: stream_options opt-out must not leave a client stream:false on the wire.
         if (!bodyDisablesStreamOptions && isForceStreamProvider(this.provider)) {

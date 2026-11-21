@@ -4,6 +4,7 @@ import { getModelTargetFormat } from "../config/providerModels.ts";
 import { isResponsesEndpointPath } from "../utils/responsesEndpoint.ts";
 import { chatRequestToXaiResponses } from "@/lib/providers/xai/translators/openai-chat.ts";
 import { capXaiRequestHistory } from "../services/xaiMessageCap.ts";
+import { applyStreamUsageOptions } from "./streamUsageOptions.ts";
 import { flattenNamespaceToolName } from "../translator/request/openai-responses/namespaceFlatten.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -393,7 +394,13 @@ export class XaiExecutor extends BaseExecutor {
       if (effort) out.reasoning_effort = effort;
     }
 
-    return capXaiRequestHistory(out);
+    // xAI only streams a usage chunk when asked (#8).
+    const withUsage = applyStreamUsageOptions(
+      out,
+      stream,
+      credentials?.providerSpecificData?.disableStreamOptions
+    );
+    return capXaiRequestHistory(withUsage);
   }
 }
 
