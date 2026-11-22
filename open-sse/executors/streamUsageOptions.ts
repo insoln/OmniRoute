@@ -16,10 +16,16 @@ export function applyStreamUsageOptions(
   disableStreamOptions?: unknown
 ): Record<string, unknown> {
   if (stream && !disableStreamOptions) {
+    const existing =
+      body.stream_options &&
+      typeof body.stream_options === "object" &&
+      !Array.isArray(body.stream_options)
+        ? (body.stream_options as Record<string, unknown>)
+        : {};
     return {
       ...body,
       stream_options: {
-        ...((body.stream_options as object) || {}),
+        ...existing,
         include_usage: true,
       },
     };

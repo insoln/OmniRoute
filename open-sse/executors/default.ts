@@ -941,11 +941,7 @@ export class DefaultExecutor extends BaseExecutor {
           defaultsRecord.stream !== undefined &&
           defaultsRecord.stream !== true;
         if (bodyDisablesStreamOptions) {
-          if (Object.prototype.hasOwnProperty.call(defaultsRecord, "stream_options")) {
-            const withoutStreamOptions = { ...defaultsRecord };
-            delete withoutStreamOptions.stream_options;
-            withDefaults = withoutStreamOptions;
-          }
+          withDefaults = applyStreamUsageOptions(defaultsRecord, false);
         } else {
           const disableStreamOptions = credentials?.providerSpecificData?.disableStreamOptions;
           withDefaults = applyStreamUsageOptions(defaultsRecord, true, disableStreamOptions);

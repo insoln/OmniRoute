@@ -187,6 +187,7 @@ function normalizeXaiResponsesBodyShape(out: JsonRecord): void {
     delete out.tool_choice;
     delete out.parallel_tool_calls;
   }
+  delete out.stream_options;
   if (Array.isArray(out.input)) out.input = normalizeXaiResponsesInput(out.input);
 }
 
@@ -395,11 +396,13 @@ export class XaiExecutor extends BaseExecutor {
     }
 
     // xAI only streams a usage chunk when asked (#8).
-    const withUsage = applyStreamUsageOptions(
-      out,
-      stream,
-      credentials?.providerSpecificData?.disableStreamOptions
-    );
+    const bodyDisablesStream = out.stream !== undefined && out.stream !== true;
+    const disableStreamOptions = credentials?.providerSpecificData?.disableStreamOptions;
+    const effectiveStream = stream && !bodyDisablesStream;
+    let withUsage = applyStreamUsageOptions(out, effectiveStream, disableStreamOptions);
+    if (effectiveStream && !disableStreamOptions) {
+      withUsage = { ...withUsage, stream: true };
+    }
     return capXaiRequestHistory(withUsage);
   }
 }
