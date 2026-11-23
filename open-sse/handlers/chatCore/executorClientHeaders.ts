@@ -8,12 +8,17 @@
  * OpenCode additionally retains explicit conversation identity before body translation.
  */
 import { preserveOpencodeSessionIdentity } from "../../utils/opencodeSessionIdentity.ts";
+import {
+  CODEX_METADATA_CACHE_SESSION_HEADER,
+  preserveCodexMetadataSessionIdentity,
+} from "../../executors/codex/promptCacheKey.ts";
 
 // Pre-compiled set for O(1) lease control header checks (hot path)
 const LEASE_CONTROL_HEADERS = new Set([
   "x-omniroute-lease-owner",
   "x-omniroute-lease-generation",
   "x-deadline-token",
+  CODEX_METADATA_CACHE_SESSION_HEADER,
 ]);
 
 function isLeaseControlHeader(key: string): boolean {
@@ -48,5 +53,6 @@ export function buildExecutorClientHeaders(
   }
 
   preserveOpencodeSessionIdentity(normalized, request);
+  preserveCodexMetadataSessionIdentity(normalized, request);
   return Object.keys(normalized).length > 0 ? normalized : null;
 }

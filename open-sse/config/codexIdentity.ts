@@ -44,6 +44,12 @@ export type CodexClientIdentity = {
   windowId: string;
   turnStartedAtUnixMs: number;
   /**
+   * Normalized per-session ID extracted from inbound client headers (when present).
+   * Used so `transformRequest()` can derive a per-session `prompt_cache_key` without
+   * falling back to the account-wide `workspaceId`.
+   */
+  clientSessionId?: string | null;
+  /**
    * True when the inbound request already carried a Codex client identity
    * header. Only then may the session-scoped carriers be converged/rewritten;
    * synthesizing them for a client that presented none makes the request look
@@ -332,6 +338,7 @@ export function createCodexClientIdentity(
     options.mode ?? getCodexFingerprintMode(providerSpecificData, options.isOAuth ?? true);
   if (mode === "off") return null;
 
+  const normalizedClientSessionId = normalizeCodexSessionId(clientSessionId);
   const installationId = getCodexInstallationId(providerSpecificData, options.accountKey);
   const clientPresentedIdentity = options.clientPresentedIdentity ?? true;
   if (mode === "device") {
@@ -343,6 +350,7 @@ export function createCodexClientIdentity(
       turnId: "",
       windowId: "",
       turnStartedAtUnixMs: Date.now(),
+      clientSessionId: normalizedClientSessionId,
       clientPresentedIdentity,
     };
   }
@@ -351,8 +359,11 @@ export function createCodexClientIdentity(
   const threadId =
     mode === "full"
       ? sessionId
-      : getCodexConvergedThreadId(clientSessionId, providerSpecificData, options.accountKey) ||
-        sessionId;
+      : getCodexConvergedThreadId(
+          normalizedClientSessionId,
+          providerSpecificData,
+          options.accountKey
+        ) || sessionId;
 
   return {
     mode,
@@ -362,6 +373,7 @@ export function createCodexClientIdentity(
     turnId: randomUUID(),
     windowId: `${threadId}:0`,
     turnStartedAtUnixMs: Date.now(),
+    clientSessionId: normalizedClientSessionId,
     clientPresentedIdentity,
   };
 }
